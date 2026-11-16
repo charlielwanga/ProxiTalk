@@ -634,8 +634,8 @@
     stop.classList.toggle('hidden', !status.running);
     if (!native) label.textContent = 'Native BLE discovery is available only in the Android app.';
     else if (status.error) label.textContent = status.error;
-    else if (status.running) label.textContent = `Discovery on · ${status.peerCount || 0} compatible device${status.peerCount === 1 ? '' : 's'} nearby. Messages are not transferred yet.`;
-    else label.textContent = 'Discovery is off. Turn it on only while you want nearby devices detected.';
+    else if (status.running) label.textContent = `BLE on · ${status.peerCount || 0} nearby · ${status.connectedPeerCount || 0} connected. Packet-carrier prototype; app messages are not confirmed over BLE.`;
+    else label.textContent = 'BLE is off. Turn it on only while you want nearby devices detected.';
   }
   $('bleStartBtn').onclick = async () => {
     const result = await ProxiBLE.startScan();
