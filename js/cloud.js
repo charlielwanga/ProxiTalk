@@ -18,7 +18,12 @@ const ProxiCloud = (() => {
     const raw = await response.text();
     let data = null;
     try { data = raw ? JSON.parse(raw) : null; } catch (_) { data = raw; }
-    if (!response.ok) throw new Error(data?.message || data?.hint || 'Cloud request failed (' + response.status + ')');
+    if (!response.ok) {
+      const error = new Error(data?.message || data?.hint || 'Cloud request failed');
+      error.status = response.status;
+      error.code = data?.code || null;
+      throw error;
+    }
     return data;
   }
 
@@ -59,7 +64,11 @@ const ProxiCloud = (() => {
         packet_type: 'message',
       }),
     });
-    return rows?.[0] || null;
+    const inserted = Array.isArray(rows) ? rows[0] : null;
+    if (!inserted?.id) {
+      throw new Error('The mailbox did not confirm saving this message (no message row ID returned).');
+    }
+    return inserted;
   }
 
   async function receivePending(userId) {

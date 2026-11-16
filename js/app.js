@@ -45,8 +45,8 @@
   let replyTo = null;
   let mediaRecorder = null, mediaChunks = [], recording = false;
 
-  // Remove prototype fixtures and synthetic inbound traffic from older installs;
-  // preserve only user-authored local drafts and mark them as unsent.
+  // Remove known prototype fixtures and old synthetic inbound messages without
+  // downgrading verified cloud messages from the authenticated mailbox.
   const legacyIds = new Set(['Amina', 'Brian', 'Cathy', 'David', 'Esther', 'Kampala Market Group', 'Emergency SOS Network']);
   const hadLegacyContacts = contacts.some(c => legacyIds.has(c.id));
   contacts = contacts.filter(c => !legacyIds.has(c.id));
@@ -54,14 +54,16 @@
   let migratedDrafts = false;
   for (const id of Object.keys(chats)) {
     const messages = Array.isArray(chats[id]) ? chats[id] : [];
-    const drafts = messages.filter(m => m.from === 'me');
-    if (drafts.length !== messages.length) migratedDrafts = true;
-    drafts.forEach(m => {
+    const retained = messages.filter(m => m.from === 'me' || (m.from === 'them' && m.cloudId && m.encrypted));
+    if (retained.length !== messages.length) migratedDrafts = true;
+    retained.forEach(m => {
+      const confirmedCloudMessage = !!m.cloudId && m.encrypted && ['sent', 'received'].includes(m.status);
+      if (confirmedCloudMessage) return;
       if (m.status !== 'local' || m.encrypted || m.hops || m.path || m.cipher) migratedDrafts = true;
       m.status = 'local'; m.encrypted = false; m.hops = 0;
       delete m.path; delete m.cipher;
     });
-    chats[id] = drafts;
+    chats[id] = retained;
   }
   let persistQueue = Promise.resolve();
   if (hadLegacyContacts || migratedDrafts) persist();
@@ -276,7 +278,7 @@
       const replyHtml = m.replyTo ? `<div class="reply-quote"><b>${esc(m.replyTo.sender || 'You')}</b><span>${esc(m.replyTo.text || '')}</span></div>` : '';
       const reaction = m.reaction ? `<span class="reaction">${esc(m.reaction)}</span>` : '';
       const sosCls = m.isSOS ? ' sos-bubble' : '';
-      const statusChip = m.status === 'local' ? '<span class="status-chip">Saved here · not sent</span>' : (m.status === 'sent' ? '<span class="status-chip">Encrypted · server queued</span>' : '');
+      const statusChip = m.status === 'local' ? '<span class="status-chip">Saved here · not sent</span>' : (m.status === 'failed' ? '<span class="status-chip">Delivery not confirmed · saved here</span>' : (m.status === 'sent' ? '<span class="status-chip">Encrypted · server queued</span>' : ''));
       html += `
         <div class="msg-row ${isMe ? 'me' : 'them'}">
           <div class="bubble${sosCls}" data-mid="${esc(m.id)}">
@@ -351,7 +353,7 @@
     const c = contactById(activeChat);
     const msgs = chats[activeChat] || [];
     const last = msgs[msgs.length - 1];
-    $('chatStatus').textContent = offlineMode ? 'Local drafts only · not sent' : (last?.status === 'local' ? 'Saved on this device · not sent' : (c?.proxiId ? 'Encrypted online messaging' : 'Choose a verified ProxiTalk ID'));
+    $('chatStatus').textContent = offlineMode ? 'Local drafts only · not sent' : (last?.status === 'local' ? 'Saved on this device · not sent' : (last?.status === 'failed' ? 'Delivery not confirmed · message saved locally' : (c?.proxiId ? 'Encrypted online messaging' : 'Choose a verified ProxiTalk ID')));
     $('hopBadge').textContent = last?.status === 'sent' ? 'server queued' : 'no mesh';
   }
 
@@ -390,13 +392,16 @@
       return;
     }
     try {
-      await ProxiCloud.sendEncryptedMessage(authUser.id, c, text);
-      msg.status = 'sent'; msg.encrypted = true;
+      const savedRow = await ProxiCloud.sendEncryptedMessage(authUser.id, c, text);
+      msg.status = 'sent'; msg.encrypted = true; msg.cloudId = savedRow.id;
       persist(); renderMessages(); renderChatList(); updateChatStatus();
-      toast('Encrypted and queued for delivery');
+      toast('Encrypted and saved to the server mailbox');
     } catch (error) {
-      console.warn('[ProxiTalk] encrypted message not sent', error);
-      toast('Not sent: ' + (error.message || 'network error') + '. It remains a local draft.');
+      console.warn('[ProxiTalk] message delivery was not confirmed', error);
+      msg.status = 'failed'; msg.failureMessage = error.message || 'Network error';
+      persist(); renderMessages(); renderChatList(); updateChatStatus();
+      const code = error.code ? ' [' + error.code + ']' : (error.status ? ' [HTTP ' + error.status + ']' : '');
+      toast('Delivery not confirmed' + code + ': ' + msg.failureMessage + '. Saved locally.');
     }
   }
 

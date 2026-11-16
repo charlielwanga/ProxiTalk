@@ -104,6 +104,9 @@ test('message transport encrypts before insert and scopes message policies to pa
   const migration = await read('supabase/migrations/202611160002_create_authenticated_cloud_messaging.sql');
   assert.match(cloud, /ProxiCrypto\.encryptFor\(recipient\.public_key, plaintext\)/);
   assert.match(cloud, /ciphertext,\s*packet_type: 'message'/);
+  assert.match(cloud, /if \(!inserted\?\.id\)/);
+  assert.match(app, /msg\.cloudId = savedRow\.id/);
+  assert.match(app, /msg\.status = 'failed'/);
   assert.match(crypto, /ECDH/);
   assert.match(crypto, /HKDF/);
   assert.match(crypto, /AES-GCM/);
