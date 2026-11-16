@@ -1,5 +1,5 @@
 /* ProxiTalk local-preview service worker. No message/API requests are cached. */
-const CACHE = 'proxitalk-preview-v3';
+const CACHE = 'proxitalk-preview-v4';
 const ASSETS = [
   './', './index.html', './manifest.json', './assets/icon.svg',
   './css/style.css', './js/storage.js', './js/mesh.js', './js/app.js',
