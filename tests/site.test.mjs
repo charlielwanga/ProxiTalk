@@ -180,6 +180,7 @@ test('static build includes the complete application shell and service worker ne
     await assert.doesNotReject(access(resolve(root, file)), file);
   }
   const sw = await read('dist/sw.js');
+  assert.match(sw, /const CACHE = 'proxitalk-shell-v6'/);
   const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
   assert.ok(assetList, 'service worker should declare its precache list');
   const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
