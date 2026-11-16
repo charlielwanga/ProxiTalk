@@ -74,6 +74,28 @@ test('recipient-only encryption and device-local history encryption round-trip',
   assert.ok(alicePublic.x && bobPublic.x);
 });
 
+test('mailbox send accepts UI camelCase and database snake_case contact keys', async () => {
+  const source = await read('js/cloud.js');
+  const requests = [];
+  const ProxiCloud = runInNewContext(source + String.fromCharCode(10) + 'ProxiCloud', {
+    window: { ProxiTalkConfig: { supabaseUrl: 'https://example.invalid', publishableKey: 'test-publishable' } },
+    ProxiAuth: { async accessToken() { return 'test-access-token'; } },
+    ProxiCrypto: { async encryptFor(key, text) { return { recipientX: key.x, text }; } },
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, status: 201, async text() { return '[{"id":"message-row"}]'; } };
+    },
+    console: { warn() {} },
+  });
+  const key = { x: 'public-x' };
+  const camelRow = await ProxiCloud.sendEncryptedMessage('sender', { userId: 'recipient-a', publicKey: key }, 'hello');
+  const snakeRow = await ProxiCloud.sendEncryptedMessage('sender', { user_id: 'recipient-b', public_key: key }, 'hello');
+  assert.equal(camelRow.id, 'message-row');
+  assert.equal(snakeRow.id, 'message-row');
+  assert.equal(JSON.parse(requests[0].options.body).recipient_id, 'recipient-a');
+  assert.equal(JSON.parse(requests[1].options.body).recipient_id, 'recipient-b');
+});
+
 test('fresh installs have no seeded conversations or fake network replies', async () => {
   const app = await read('js/app.js');
   assert.match(app, /Store\.load\('contacts', \[\]\)/);
@@ -102,7 +124,7 @@ test('message transport encrypts before insert and scopes message policies to pa
   const crypto = await read('js/crypto.js');
   const app = await read('js/app.js');
   const migration = await read('supabase/migrations/202611160002_create_authenticated_cloud_messaging.sql');
-  assert.match(cloud, /ProxiCrypto\.encryptFor\(recipient\.public_key, plaintext\)/);
+  assert.match(cloud, /ProxiCrypto\.encryptFor\(recipientPublicKey, plaintext\)/);
   assert.match(cloud, /ciphertext,\s*packet_type: 'message'/);
   assert.match(cloud, /if \(!inserted\?\.id\)/);
   assert.match(app, /msg\.cloudId = savedRow\.id/);

@@ -52,14 +52,17 @@ const ProxiCloud = (() => {
   }
 
   async function sendEncryptedMessage(senderId, recipient, plaintext) {
-    if (!recipient?.user_id || !recipient?.public_key) throw new Error('Contact key not available');
-    const ciphertext = await ProxiCrypto.encryptFor(recipient.public_key, plaintext);
+    // UI contacts use camelCase; raw Supabase directory records use snake_case.
+    const recipientUserId = recipient?.userId || recipient?.user_id;
+    const recipientPublicKey = recipient?.publicKey || recipient?.public_key;
+    if (!recipientUserId || !recipientPublicKey) throw new Error('Contact key not available');
+    const ciphertext = await ProxiCrypto.encryptFor(recipientPublicKey, plaintext);
     const rows = await api('proxitalk_messages', {
       method: 'POST',
       headers: { Prefer: 'return=representation' },
       body: JSON.stringify({
         sender_id: senderId,
-        recipient_id: recipient.user_id,
+        recipient_id: recipientUserId,
         ciphertext,
         packet_type: 'message',
       }),
