@@ -1,8 +1,11 @@
 package com.proxitalk.app;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -15,7 +18,7 @@ import android.webkit.WebViewClient;
 
 import androidx.webkit.WebViewAssetLoader;
 
-/** Android 13+ secure-origin WebView host; no Bluetooth packet transport is implemented yet. */
+/** Android 13+ secure-origin WebView host with opt-in BLE discovery (no message relay yet). */
 public class MainActivity extends Activity {
 
     private static final String APP_ORIGIN = "https://appassets.androidplatform.net";
@@ -26,6 +29,8 @@ public class MainActivity extends Activity {
     private static final String AUTH_PATH = "/callback";
     private static final String AUTH_REDIRECT_URI = AUTH_SCHEME + "://" + AUTH_HOST + AUTH_PATH;
     private static final int FILE_CHOOSER_REQUEST = 1;
+    private static final int BLE_PERMISSION_REQUEST = 2;
+    private boolean bleStartPending;
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
@@ -103,9 +108,8 @@ public class MainActivity extends Activity {
             }
         });
 
-        // The only JavaScript interface method returns a fixed redirect URI. The page is
-        // served from the bundled, HTTPS-like WebViewAssetLoader origin; external pages are
-        // opened outside this WebView and never receive this interface.
+        // The JavaScript interface is available only to the bundled app origin. External
+        // pages are opened outside this WebView and never receive the native BLE controls.
         webView.addJavascriptInterface(new ProxiTalkBridge(), "ProxiTalkNative");
         handleAuthIntent(getIntent());
         webView.loadUrl(APP_ENTRY_URL);
@@ -149,6 +153,65 @@ public class MainActivity extends Activity {
         handleAuthIntent(intent);
     }
 
+    private java.util.List<String> missingMeshPermissions() {
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            for (String permission : new String[]{Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT}) {
+                if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) missing.add(permission);
+            }
+        } else if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+        return missing;
+    }
+
+    private boolean hasRequiredMeshPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+                    && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
+                    && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+        }
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestOrStartMesh() {
+        java.util.List<String> missing = missingMeshPermissions();
+        if (!missing.isEmpty()) {
+            bleStartPending = true;
+            requestPermissions(missing.toArray(new String[0]), BLE_PERMISSION_REQUEST);
+            return;
+        }
+        launchMeshService();
+    }
+
+    private void launchMeshService() {
+        Intent intent = new Intent(this, BleMeshService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent);
+        else startService(intent);
+    }
+
+    private void stopMeshService() {
+        bleStartPending = false;
+        stopService(new Intent(this, BleMeshService.class));
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != BLE_PERMISSION_REQUEST) return;
+        boolean start = bleStartPending;
+        bleStartPending = false;
+        if (!start) return;
+        if (hasRequiredMeshPermissions()) launchMeshService();
+        else if (webView != null) webView.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('proxitalk-ble-error',{detail:'Bluetooth permission was not granted'}))", null);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -187,5 +250,20 @@ public class MainActivity extends Activity {
     public final class ProxiTalkBridge {
         @JavascriptInterface
         public String getAuthRedirectUrl() { return AUTH_REDIRECT_URI; }
+
+        @JavascriptInterface
+        public String getBleStatus() { return BleMeshService.snapshotJson(); }
+
+        @JavascriptInterface
+        public String startBleDiscovery() {
+            runOnUiThread(() -> requestOrStartMesh());
+            return "{\"ok\":true,\"state\":\"starting\"}";
+        }
+
+        @JavascriptInterface
+        public String stopBleDiscovery() {
+            runOnUiThread(() -> stopMeshService());
+            return "{\"ok\":true,\"state\":\"stopping\"}";
+        }
     }
 }

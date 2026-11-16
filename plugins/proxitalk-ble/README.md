@@ -1,27 +1,32 @@
-# ProxiTalk BLE Plugin (Capacitor)
+# ProxiTalk BLE transport roadmap
 
-Native Bluetooth Low Energy mesh transport for the Android APK.
+The current native implementation is `android/app/src/main/java/com/proxitalk/app/BleMeshService.java`, not a Capacitor plugin. The app uses a narrowly scoped `window.ProxiTalkNative` WebView bridge.
 
-## Why a custom plugin?
-The community `bluetooth-le` plugin handles scanning/connecting, but ProxiTalk needs:
-- **Background advertising** — your phone must be discoverable as a relay even when the app is backgrounded
-- **GATT server** — accept incoming packets from peers
-- **Chunked transfer** — 180-byte BLE MTU reassembly (handled in `js/ble.js`)
+## Implemented first milestone
 
-## API (exposed as `window.ProxiTalkNative`)
+- User-initiated, foreground BLE advertisement and scanning of one ProxiTalk service UUID.
+- Runtime permission flow for Android 12+ nearby devices (and legacy Android location permission where required).
+- A foreground notification while discovery is active.
+- Anonymous peer count only; raw device addresses and advertised names are not exposed to the web layer.
+
+This milestone is **discovery only**. There is no GATT connection, transfer, message relay, or offline delivery claim.
+
+## Bridge methods
+
 ```js
-ProxiTalkNative.startScan()          // discover nearby ProxiTalk peers
-ProxiTalkNative.stopScan()
-ProxiTalkNative.sendPacket(json)     // write packet to connected peer
-ProxiTalkNative.wifiDirectSend(json) // Wi-Fi Direct fallback
-ProxiTalkNative.getDeviceId()        // stable node ID
+ProxiTalkNative.startBleDiscovery() // request permissions and start opt-in discovery
+ProxiTalkNative.stopBleDiscovery()  // stop the foreground discovery service
+ProxiTalkNative.getBleStatus()      // JSON status: running, scan/advertise, peerCount, error
 ```
 
-## Implementation checklist
-- [ ] `BleMeshService.kt` — foreground service with `BluetoothLeAdvertiser`
-- [ ] GATT server with service `0xFEAA`, characteristic `0xFEAB` (notify + write)
-- [ ] Foreground notification: "ProxiTalk relay active 📡"
-- [ ] Battery-aware: pause advertising when battery < 20% (unless charging)
-- [ ] Wire `MainActivity.java` bridge methods to the service
+`js/ble.js` wraps these methods as `ProxiBLE`. On web builds it reports native discovery as unavailable.
 
-See `android/app/src/main/java/com/proxitalk/app/MainActivity.java` for the bridge stub.
+## Next implementation checklist
+
+- [ ] Test discovery and permission/error states on two Android 13 devices.
+- [ ] Review an opaque packet envelope (recipient, expiry, TTL, unique ID, ciphertext).
+- [ ] Add a GATT service/characteristic and bounded, validated fragmentation/reassembly.
+- [ ] Add deduplication, encrypted store-and-forward, and recipient acknowledgements.
+- [ ] Test interrupted/reordered packets, force-stop/background behavior, battery impact, and cloud fallback.
+
+Do not add raw message plaintext to the native bridge or BLE advertisement. Keep recipient-only encryption in the Web Crypto layer and treat BLE as an untrusted carrier. Android-only first; iOS is a separate future decision.

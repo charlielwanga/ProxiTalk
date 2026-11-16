@@ -14,6 +14,7 @@ const files = [
   'js/crypto.js',
   'js/auth.js',
   'js/cloud.js',
+  'js/ble.js',
   'js/mesh.js',
   'js/app.js',
   'assets/icon.svg',

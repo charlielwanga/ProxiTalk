@@ -7,7 +7,7 @@ import { webcrypto } from 'node:crypto';
 
 const root = resolve(import.meta.dirname, '..');
 const read = file => readFile(resolve(root, file), 'utf8');
-const runtime = ['js/config.js', 'js/storage.js', 'js/crypto.js', 'js/auth.js', 'js/cloud.js', 'js/mesh.js', 'js/app.js'];
+const runtime = ['js/config.js', 'js/storage.js', 'js/crypto.js', 'js/auth.js', 'js/cloud.js', 'js/ble.js', 'js/mesh.js', 'js/app.js'];
 
 test('runtime JavaScript parses', async () => {
   for (const file of runtime) {
@@ -167,6 +167,26 @@ test('message transport encrypts before insert and scopes message policies to pa
   assert.match(migration, /expires_at <= created_at \+ interval '14 days'/);
 });
 
+test('Android BLE milestone is opt-in discovery only and does not claim message transport', async () => {
+  const manifest = await read('android/AndroidManifest.xml');
+  const service = await read('android/app/src/main/java/com/proxitalk/app/BleMeshService.java');
+  const activity = await read('android/app/src/main/java/com/proxitalk/app/MainActivity.java');
+  const ble = await read('js/ble.js');
+  const html = await read('index.html');
+  assert.match(manifest, /android.permission.BLUETOOTH_SCAN/);
+  assert.match(manifest, /android.permission.BLUETOOTH_ADVERTISE/);
+  assert.match(manifest, /android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE/);
+  assert.match(manifest, /android:name="\.BleMeshService"[\s\S]*?android:exported="false"/);
+  assert.match(service, /startAdvertising\(\)/);
+  assert.match(service, /startScanning\(\)/);
+  assert.match(service, /setConnectable\(false\)/);
+  assert.match(service, /"discovery-only"/);
+  assert.match(activity, /requestOrStartMesh\(\)/);
+  assert.match(ble, /startBleDiscovery/);
+  assert.match(html, /Discovery only:[^<]*does not send or relay messages over Bluetooth/);
+  assert.doesNotMatch(service, /BluetoothGattServer|sendPacket/);
+});
+
 test('Android 13 app shell uses a secure asset origin and a narrow PKCE deep link', async () => {
   const activity = await read('android/app/src/main/java/com/proxitalk/app/MainActivity.java');
   const manifest = await read('android/AndroidManifest.xml');
@@ -202,11 +222,11 @@ test('non-messaging features are accurately disclosed as unavailable', async () 
 });
 
 test('static build includes the complete application shell and service worker never caches APIs', async () => {
-  for (const file of ['dist/index.html', 'dist/manifest.json', 'dist/sw.js', 'dist/css/style.css', 'dist/js/config.js', 'dist/js/storage.js', 'dist/js/crypto.js', 'dist/js/auth.js', 'dist/js/cloud.js', 'dist/js/mesh.js', 'dist/js/app.js', 'dist/assets/icon.svg', 'android/app/src/main/assets/www/index.html']) {
+  for (const file of ['dist/index.html', 'dist/manifest.json', 'dist/sw.js', 'dist/css/style.css', 'dist/js/config.js', 'dist/js/storage.js', 'dist/js/crypto.js', 'dist/js/auth.js', 'dist/js/cloud.js', 'dist/js/ble.js', 'dist/js/mesh.js', 'dist/js/app.js', 'dist/assets/icon.svg', 'android/app/src/main/assets/www/index.html']) {
     await assert.doesNotReject(access(resolve(root, file)), file);
   }
   const sw = await read('dist/sw.js');
-  assert.match(sw, /const CACHE = 'proxitalk-shell-v7'/);
+  assert.match(sw, /const CACHE = 'proxitalk-shell-v8'/);
   const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
   assert.ok(assetList, 'service worker should declare its precache list');
   const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);

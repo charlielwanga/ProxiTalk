@@ -1,20 +1,29 @@
-# ProxiTalk current architecture / launch boundary
+# ProxiTalk architecture and launch boundary
 
-## Web preview
+## Web and online messaging
 
-The deployable site is a static HTML/CSS/JavaScript app, built into `dist/` by `scripts/build-site.mjs`. The only active app modules are local storage, the non-simulating transport status view, and UI logic. A service worker caches only the static shell and never fabricates network delivery.
+The static web app is built into `dist/` by `scripts/build-site.mjs` and hosted on GitHub Pages. Authenticated users have one directory identity and can send one-to-one text as a recipient-key-encrypted envelope through the Supabase mailbox. The server stores ciphertext only; participant-scoped RLS governs mailbox access. The app confirms a send only when Supabase returns the inserted message-row ID. Recipients poll for pending rows, decrypt locally, then acknowledge them.
 
-Contacts, drafts, and locally selected attachment data are browser-local. There is no login, cross-device sync, or message delivery in this build. UI status explicitly identifies drafts as unsent.
+Browser sessions persist in the current browser profile. Device ECDH private keys are non-extractable CryptoKeys in IndexedDB; signed-in chat history is encrypted with a device-derived key. These keys are not currently recoverable or portable to another browser/device. Clearing site/app data can permanently remove the key.
 
-## Security actions already taken
+## Android host and BLE discovery
 
-- Dropped the anonymous `proxitalk_open_all` RLS policies from all seven public tables and revoked table privileges from `PUBLIC`, `anon`, and `authenticated`; RLS is enabled and forced.
-- Replaced the two Supabase Edge Function bodies with disabled responses and turned on JWT verification. They must not be called as messaging services until real authentication and authorization exist.
-- Excluded Supabase, Bluetooth, Wi-Fi Direct, calls, SMS, and crypto modules from the deployed static bundle.
-- Added restrictive security headers for the Vercel static build.
+The Android module serves bundled assets through `WebViewAssetLoader` and limits the native JavaScript bridge to the app origin. Email PKCE redirects use a narrowly scoped custom URI. The new BLE milestone is opt-in and foreground-only: `BleMeshService` advertises a service UUID and scans for nearby devices using Android BLE permissions. It reports a count only; it does not expose device addresses/names to JavaScript.
 
-The schema and functions are infrastructure scaffolding only. A privileged operator can still access the database; production policies must be designed around verified users, device identity, packet recipients, group membership, retention, and consent before re-enabling them.
+**There is no GATT connection, packet transfer, message relay, or store-and-forward yet.** BLE discovery does not mean messages can be sent offline. Android 13 is the confirmed first native target; iOS is not scoped for this milestone.
 
-## Planned system (not implemented)
+## Security and operational boundary
 
-Future design goals include native Android BLE advertising and foreground relaying, peer discovery and authenticated store-and-forward packets, secure per-device identity/key exchange, a gateway service with user-scoped RLS, group/SOS semantics, and verified delivery acknowledgements. These are not features of the current build. The Android bridge and files under `js/ble.js`, `js/wifi-direct.js`, `js/calls.js`, `js/sms-bridge.js`, and `js/crypto.js` are not loaded by the web app.
+- The browser uses a public Supabase publishable key. No service-role key belongs in client code. RLS—not key secrecy—protects user data.
+- E2E message ciphertext uses ephemeral P-256 ECDH, HKDF-SHA-256, and AES-256-GCM. No independent cryptographic review has been performed.
+- Directory IDs, names, public keys, sender/recipient IDs, and timing are visible to the service. Browser compromise or malicious client updates can expose plaintext.
+- Production SMTP, CAPTCHA/abuse prevention, server-side quotas, retention cleanup, backups/restore, monitoring, support, privacy/legal review, and incident response are incomplete.
+- The Android APK workflow produces debug test builds, not store-release packages. Do not uninstall the current app or clear its data until a safe signing/update or key-migration strategy exists.
+
+## Remaining implementation sequence
+
+1. Validate opt-in BLE discovery on two Android 13 devices, including permissions denied/off and Bluetooth disabled.
+2. Review a bounded opaque-packet protocol: recipient identity, expiry, TTL/hop limit, deduplication ID, and acknowledgements. Keep recipient-only encryption.
+3. Implement GATT exchange and bounded fragmentation/reassembly; test both directions and interruption.
+4. Add encrypted local store-and-forward and delivery confirmation, then cloud fallback and expiry cleanup.
+5. Complete the two-real-account auth/message acceptance matrix, independent security review, and production operations before launch.

@@ -158,6 +158,14 @@
     </div>
 
     <div class="panel-section">
+      <h4>📡 Nearby discovery (Android)</h4>
+      <p id="bleStatus" class="muted" role="status" aria-live="polite">Native BLE discovery is available only in the Android app.</p>
+      <button class="btn-primary" id="bleStartBtn" type="button">Enable nearby discovery</button>
+      <button class="btn-primary hidden" id="bleStopBtn" type="button">Stop nearby discovery</button>
+      <p class="muted">Discovery only: this build does not send or relay messages over Bluetooth. Discovery stays on only while you enable it.</p>
+    </div>
+
+    <div class="panel-section">
       <h4>📊 Network Stats</h4>
       <div class="stat-grid">
         <div class="stat"><b id="stNodes">1</b><label>Local device</label></div>
@@ -186,7 +194,7 @@
 
     <div class="panel-section">
       <h4>Transport status</h4>
-      <p class="muted">Live Bluetooth/Wi-Fi Direct transport is not implemented in this web build. Nothing shown here represents nearby phones.</p>
+      <p class="muted">The Web build has no Bluetooth transport. The Android app has opt-in BLE discovery only; packet transfer and offline messaging are not implemented.</p>
     </div>
   </aside>
 </div>
@@ -206,6 +214,7 @@
 <script src="js/crypto.js"></script>
 <script src="js/auth.js"></script>
 <script src="js/cloud.js"></script>
+<script src="js/ble.js"></script>
 <script src="js/mesh.js"></script>
 <script src="js/app.js"></script>
 </body>

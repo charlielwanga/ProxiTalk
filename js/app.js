@@ -625,7 +625,36 @@
   // this build does not simulate connectivity or claim message delivery.
 
   // ── Panel / search / filters / back ────────────────────────
-  $('meshPanelBtn').onclick = () => $('meshPanel').classList.toggle('hidden');
+  function refreshBleUI() {
+    const native = ProxiBLE.detect() === 'native-discovery';
+    const status = ProxiBLE.getStatus();
+    const start = $('bleStartBtn'), stop = $('bleStopBtn'), label = $('bleStatus');
+    start.disabled = !native;
+    start.classList.toggle('hidden', !!status.running);
+    stop.classList.toggle('hidden', !status.running);
+    if (!native) label.textContent = 'Native BLE discovery is available only in the Android app.';
+    else if (status.error) label.textContent = status.error;
+    else if (status.running) label.textContent = `Discovery on · ${status.peerCount || 0} compatible device${status.peerCount === 1 ? '' : 's'} nearby. Messages are not transferred yet.`;
+    else label.textContent = 'Discovery is off. Turn it on only while you want nearby devices detected.';
+  }
+  $('bleStartBtn').onclick = async () => {
+    const result = await ProxiBLE.startScan();
+    if (!result.ok) toast(result.error || 'Could not start BLE discovery');
+    else toast('Nearby discovery starting. Approve Android Bluetooth permissions if asked.');
+    refreshBleUI();
+  };
+  $('bleStopBtn').onclick = () => {
+    ProxiBLE.stopScan();
+    toast('Nearby discovery stopped');
+    refreshBleUI();
+  };
+  window.addEventListener('proxitalk-ble-error', event => {
+    toast(String(event.detail || 'Bluetooth permission was not granted'));
+  });
+  $('meshPanelBtn').onclick = () => {
+    $('meshPanel').classList.toggle('hidden');
+    refreshBleUI();
+  };
   $('meshClose').onclick = () => $('meshPanel').classList.add('hidden');
   $('searchInput').oninput = e => { search = e.target.value; renderChatList(); };
   $('filterTabs').querySelectorAll('.tab').forEach(t => t.onclick = () => {
@@ -641,6 +670,8 @@
 
   // ── Init ───────────────────────────────────────────────────
   MeshEngine.init($('meshCanvas'), { onDeliver: onMeshDeliver, onStats: onMeshStats });
+  refreshBleUI();
+  if (ProxiBLE.detect() === 'native-discovery') setInterval(refreshBleUI, 2000);
   $('myAvatar').textContent = currentProfile ? initials(currentProfile.display_name) : 'PT';
   $('myAvatar').title = currentProfile?.proxitalk_id || 'Account settings';
   $('meshPillText').textContent = offlineMode ? 'Local drafts only' : (currentProfile ? 'Online mailbox ready' : 'Sign in to message');
