@@ -6,7 +6,15 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothGatt;
+import android.bluetooth.BluetoothGattCallback;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattServer;
+import android.bluetooth.BluetoothGattServerCallback;
+import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.AdvertiseCallback;
 import android.bluetooth.le.AdvertiseData;
 import android.bluetooth.le.AdvertiseSettings;
@@ -29,43 +37,101 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** Opt-in Android BLE discovery foundation. It does not exchange or relay message packets. */
+/** Opt-in BLE packet-carrier prototype. It does not route, persist, or acknowledge messages. */
 public final class BleMeshService extends Service {
     public static final UUID SERVICE_UUID = UUID.fromString("7dd9a5d0-62a5-4a17-9e16-5f50b331a101");
+    public static final UUID PACKET_CHARACTERISTIC_UUID = UUID.fromString("7dd9a5d1-62a5-4a17-9e16-5f50b331a101");
     private static final String TAG = "ProxiTalkBLE";
     private static final String CHANNEL_ID = "proxitalk_nearby";
     private static final int NOTIFICATION_ID = 4107;
+    private static final int MAX_PACKET_BYTES = 16 * 1024;
+    private static final int MAX_INBOUND_PACKETS = 64;
+    private static final int MAX_SEEN_PACKETS = 256;
+    private static final int MAX_PEERS = 3;
+    private static final int MAX_PENDING_PER_PEER = 16;
+    private static final int FRAME_HEADER_BYTES = 8;
+    private static final int FRAME_MAGIC_0 = 0x50;
+    private static final int FRAME_MAGIC_1 = 0x54;
     private static final long PEER_TIMEOUT_MS = 30_000L;
+
     private static final Map<String, Long> PEERS = new HashMap<>();
+    private static final Map<String, Long> SERVER_PEERS = new HashMap<>();
+    private static final ArrayDeque<String> INBOUND_PACKETS = new ArrayDeque<>();
+    private static final LinkedHashSet<String> INBOUND_IDS = new LinkedHashSet<>();
+    private static final AtomicInteger NEXT_TRANSFER_ID = new AtomicInteger(1);
+    private static volatile BleMeshService instance;
     private static volatile boolean running = false;
+    private static volatile boolean scanning = false;
+    private static volatile boolean advertising = false;
     private static volatile String error = "";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Map<String, Connection> connections = new HashMap<>();
+    private final Map<String, String> connecting = new HashMap<>();
+    private final Map<String, Assembly> assemblies = new HashMap<>();
+    private BluetoothManager bluetoothManager;
+    private BluetoothAdapter adapter;
     private BluetoothLeScanner scanner;
     private BluetoothLeAdvertiser advertiser;
+    private BluetoothGattServer gattServer;
+    private BluetoothGattService gattService;
+    private BluetoothGattCharacteristic packetCharacteristic;
     private ScanCallback scanCallback;
     private AdvertiseCallback advertiseCallback;
-    private static volatile boolean scanning;
-    private static volatile boolean advertising;
+    private boolean scanningInstance;
+    private boolean advertisingInstance;
 
     private final Runnable expirePeers = new Runnable() {
         @Override public void run() {
-            synchronized (PEERS) {
-                long cutoff = System.currentTimeMillis() - PEER_TIMEOUT_MS;
-                PEERS.entrySet().removeIf(entry -> entry.getValue() < cutoff);
-            }
+            long cutoff = System.currentTimeMillis() - PEER_TIMEOUT_MS;
+            synchronized (PEERS) { PEERS.entrySet().removeIf(entry -> entry.getValue() < cutoff); }
+            synchronized (SERVER_PEERS) { SERVER_PEERS.entrySet().removeIf(entry -> entry.getValue() < cutoff); }
+            synchronized (assemblies) { assemblies.entrySet().removeIf(entry -> System.currentTimeMillis() - entry.getValue().createdAt > PEER_TIMEOUT_MS); }
             if (running) handler.postDelayed(this, 5_000L);
         }
     };
 
+    private static final class Assembly {
+        final int transferId;
+        final int total;
+        final byte[][] chunks;
+        int received;
+        int byteCount;
+        final long createdAt = System.currentTimeMillis();
+        Assembly(int transferId, int total) { this.transferId = transferId; this.total = total; this.chunks = new byte[total][]; }
+    }
+
+    private static final class Connection {
+        final BluetoothGatt gatt;
+        final String address;
+        final ArrayDeque<String> queue = new ArrayDeque<>();
+        final Set<String> sentIds = new HashSet<>();
+        BluetoothGattCharacteristic characteristic;
+        int mtu = 23;
+        byte[][] frames;
+        int frameIndex;
+        String packetId;
+        boolean discoveryStarted;
+        Connection(BluetoothGatt gatt, String address) { this.gatt = gatt; this.address = address; }
+    }
+
     @Override public void onCreate() {
         super.onCreate();
+        instance = this;
         createNotificationChannel();
     }
 
@@ -81,8 +147,8 @@ public final class BleMeshService extends Service {
             stopSelf();
             return;
         }
-        BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
-        BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
+        bluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        adapter = bluetoothManager == null ? null : bluetoothManager.getAdapter();
         if (adapter == null || !adapter.isEnabled()) {
             fail("Bluetooth is unavailable or turned off.");
             stopSelf();
@@ -96,23 +162,77 @@ public final class BleMeshService extends Service {
             return;
         }
         try {
-            startAdvertising();
+            openGattServer();
             startScanning();
             running = true;
             error = "";
             handler.removeCallbacks(expirePeers);
             handler.postDelayed(expirePeers, 5_000L);
-        } catch (SecurityException exception) {
-            fail("Android denied Bluetooth access: " + exception.getMessage());
+        } catch (Exception exception) {
+            fail("Could not start BLE packet transport: " + exception.getMessage());
             stopSelf();
         }
     }
 
+    private void openGattServer() {
+        gattServer = bluetoothManager.openGattServer(this, new BluetoothGattServerCallback() {
+            @Override public void onServiceAdded(int status, BluetoothGattService service) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    fail("Could not initialize the BLE packet service (" + status + ").");
+                    return;
+                }
+                startAdvertising();
+            }
+
+            @Override public void onConnectionStateChange(BluetoothDevice device, int status, int newState) {
+                try {
+                    String address = device.getAddress();
+                    synchronized (SERVER_PEERS) {
+                        if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                            if (!SERVER_PEERS.containsKey(address) && SERVER_PEERS.size() >= MAX_PEERS) {
+                                if (gattServer != null) gattServer.cancelConnection(device);
+                                return;
+                            }
+                            SERVER_PEERS.put(address, System.currentTimeMillis());
+                        } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                            SERVER_PEERS.remove(address);
+                            synchronized (assemblies) { assemblies.remove(address); }
+                        }
+                    }
+                } catch (SecurityException exception) { fail("Android denied a nearby-device connection operation."); }
+            }
+
+            @Override public void onCharacteristicWriteRequest(BluetoothDevice device, int requestId,
+                    BluetoothGattCharacteristic characteristic, boolean preparedWrite, boolean responseNeeded,
+                    int offset, byte[] value) {
+                boolean valid = !preparedWrite && offset == 0 && characteristic != null
+                        && PACKET_CHARACTERISTIC_UUID.equals(characteristic.getUuid())
+                        && value != null && value.length > FRAME_HEADER_BYTES && value.length <= 512;
+                if (responseNeeded) {
+                    try { gattServer.sendResponse(device, requestId,
+                            valid ? BluetoothGatt.GATT_SUCCESS : BluetoothGatt.GATT_INVALID_ATTRIBUTE_LENGTH, 0, null); }
+                    catch (SecurityException exception) { fail("Android denied a BLE packet response."); }
+                }
+                if (!valid) { fail("Rejected an invalid BLE packet frame."); return; }
+                try { acceptFrame(device.getAddress(), value); }
+                catch (SecurityException exception) { fail("Android denied access to the BLE peer address."); }
+            }
+        });
+        if (gattServer == null) throw new IllegalStateException("BLE GATT server unavailable");
+        gattService = new BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY);
+        packetCharacteristic = new BluetoothGattCharacteristic(PACKET_CHARACTERISTIC_UUID,
+                BluetoothGattCharacteristic.PROPERTY_WRITE,
+                BluetoothGattCharacteristic.PERMISSION_WRITE);
+        gattService.addCharacteristic(packetCharacteristic);
+        if (!gattServer.addService(gattService)) throw new IllegalStateException("Could not register the BLE GATT service");
+    }
+
     private void startAdvertising() {
+        if (advertiser == null || advertisingInstance) return;
         AdvertiseSettings settings = new AdvertiseSettings.Builder()
                 .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
                 .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_LOW)
-                .setConnectable(false)
+                .setConnectable(true)
                 .build();
         AdvertiseData data = new AdvertiseData.Builder()
                 .setIncludeDeviceName(false)
@@ -121,10 +241,12 @@ public final class BleMeshService extends Service {
                 .build();
         advertiseCallback = new AdvertiseCallback() {
             @Override public void onStartSuccess(AdvertiseSettings settingsInEffect) {
+                advertisingInstance = true;
                 advertising = true;
                 error = "";
             }
             @Override public void onStartFailure(int errorCode) {
+                advertisingInstance = false;
                 advertising = false;
                 fail("BLE advertising failed (" + errorCode + ").");
             }
@@ -142,21 +264,290 @@ public final class BleMeshService extends Service {
             @Override public void onScanResult(int callbackType, ScanResult result) {
                 if (result == null || result.getDevice() == null) return;
                 try {
-                    String address = result.getDevice().getAddress();
-                    if (address != null) {
-                        synchronized (PEERS) { PEERS.put(address, System.currentTimeMillis()); }
-                    }
-                } catch (SecurityException exception) {
-                    fail("Android denied access to nearby-device details.");
-                }
+                    BluetoothDevice device = result.getDevice();
+                    String address = device.getAddress();
+                    synchronized (PEERS) { PEERS.put(address, System.currentTimeMillis()); }
+                    connectPeer(device, address);
+                } catch (SecurityException exception) { fail("Android denied access to nearby-device details."); }
             }
             @Override public void onScanFailed(int errorCode) {
+                scanningInstance = false;
                 scanning = false;
                 fail("BLE scan failed (" + errorCode + ").");
             }
         };
         scanner.startScan(filters, settings, scanCallback);
+        scanningInstance = true;
         scanning = true;
+    }
+
+    private void connectPeer(BluetoothDevice device, String address) {
+        synchronized (connections) {
+            if (connections.containsKey(address) || connecting.containsKey(address) || connections.size() >= MAX_PEERS) return;
+            connecting.put(address, address);
+        }
+        BluetoothGattCallback callback = new BluetoothGattCallback() {
+            private Connection state;
+            @Override public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+                if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                    state = new Connection(gatt, address);
+                    synchronized (connections) { connecting.remove(address); connections.put(address, state); }
+                    boolean requested = false;
+                    try { requested = gatt.requestMtu(185); } catch (SecurityException ignored) { }
+                    if (!requested) beginServiceDiscovery(state);
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
+                    synchronized (connections) { connecting.remove(address); connections.remove(address); }
+                    try { gatt.close(); } catch (Exception ignored) { }
+                }
+            }
+            @Override public void onMtuChanged(BluetoothGatt gatt, int mtu, int status) {
+                if (state == null) return;
+                state.mtu = status == BluetoothGatt.GATT_SUCCESS ? Math.max(23, mtu) : 23;
+                beginServiceDiscovery(state);
+            }
+            @Override public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+                if (state == null) return;
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    fail("Could not discover the nearby packet service."); disconnect(state); return;
+                }
+                BluetoothGattService remote = gatt.getService(SERVICE_UUID);
+                BluetoothGattCharacteristic characteristic = remote == null ? null : remote.getCharacteristic(PACKET_CHARACTERISTIC_UUID);
+                if (characteristic == null) {
+                    fail("Nearby device does not expose the ProxiTalk packet service."); disconnect(state); return;
+                }
+                state.characteristic = characteristic;
+                writeNext(state);
+            }
+            @Override public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+                if (state == null) return;
+                handler.post(() -> {
+                    if (status == BluetoothGatt.GATT_SUCCESS) writeNext(state);
+                    else { fail("BLE packet frame write failed (" + status + ")."); disconnect(state); }
+                });
+            }
+        };
+        try { device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE); }
+        catch (SecurityException exception) {
+            synchronized (connections) { connecting.remove(address); }
+            fail("Android denied a BLE connection request.");
+        }
+    }
+
+    private void beginServiceDiscovery(Connection connection) {
+        if (connection.discoveryStarted) return;
+        connection.discoveryStarted = true;
+        try {
+            if (!connection.gatt.discoverServices()) fail("Could not start GATT service discovery.");
+        } catch (SecurityException exception) { fail("Android denied GATT service discovery."); }
+    }
+
+    private static JSONObject validatePacket(String json) {
+        try {
+            if (json == null || json.getBytes(StandardCharsets.UTF_8).length > MAX_PACKET_BYTES) return null;
+            JSONObject packet = new JSONObject(json);
+            String packetId = packet.optString("id");
+            String senderId = packet.optString("sender_id");
+            String recipientId = packet.optString("recipient_id");
+            long createdAt = packet.optLong("created_at", 0);
+            long expiresAt = packet.optLong("expires_at", 0);
+            java.util.Iterator<String> packetKeys = packet.keys();
+            while (packetKeys.hasNext()) {
+                String key = packetKeys.next();
+                if (!Arrays.asList("v", "id", "sender_id", "recipient_id", "created_at", "expires_at", "hops", "ciphertext").contains(key)) return null;
+            }
+            if (packet.optInt("v", 0) != 1 || packetId.length() > 80 || packetId.isEmpty()
+                    || createdAt <= 0 || createdAt > System.currentTimeMillis() + 60_000L
+                    || expiresAt <= System.currentTimeMillis() || expiresAt <= createdAt
+                    || expiresAt > createdAt + 14L * 24 * 60 * 60 * 1000
+                    || packet.optInt("hops", -1) < 0 || packet.optInt("hops", 13) > 12) return null;
+            UUID.fromString(senderId);
+            UUID.fromString(recipientId);
+            UUID.fromString(packetId);
+            JSONObject ciphertext = packet.optJSONObject("ciphertext");
+            JSONObject ephemeral = ciphertext == null ? null : ciphertext.optJSONObject("epk");
+            if (ciphertext == null || ephemeral == null) return null;
+            java.util.Iterator<String> cipherKeys = ciphertext.keys();
+            while (cipherKeys.hasNext()) {
+                String key = cipherKeys.next();
+                if (!Arrays.asList("v", "alg", "epk", "salt", "iv", "ct").contains(key)) return null;
+            }
+            java.util.Iterator<String> publicKeyKeys = ephemeral.keys();
+            while (publicKeyKeys.hasNext()) {
+                String key = publicKeyKeys.next();
+                if (!Arrays.asList("kty", "crv", "x", "y", "ext", "key_ops").contains(key)) return null;
+            }
+            if (ciphertext.optInt("v", 0) != 1
+                    || !"ECDH-P256/HKDF-SHA256/AES-256-GCM".equals(ciphertext.optString("alg"))
+                    || !"EC".equals(ephemeral.optString("kty")) || !"P-256".equals(ephemeral.optString("crv"))
+                    || ephemeral.optString("x").isEmpty() || ephemeral.optString("y").isEmpty()
+                    || ciphertext.optString("salt").isEmpty() || ciphertext.optString("iv").isEmpty()
+                    || ciphertext.optString("ct").isEmpty()) return null;
+            return packet;
+        } catch (Exception ignored) { return null; }
+    }
+
+    public static String enqueuePacket(String json) {
+        JSONObject packet = validatePacket(json);
+        if (packet == null) return "{\"ok\":false,\"error\":\"Invalid, expired, or unencrypted packet\"}";
+        BleMeshService service = instance;
+        if (!running || service == null) return "{\"ok\":false,\"error\":\"Nearby packet transport is not running\"}";
+        int connected = service.getConnectedPeerCount();
+        service.handler.post(() -> service.queuePacketForConnectedPeers(packet.toString()));
+        try {
+            JSONObject result = new JSONObject();
+            result.put("ok", true);
+            result.put("state", connected > 0 ? "queued_for_connected_peers" : "no_connected_peers");
+            result.put("connectedPeerCount", connected);
+            return result.toString();
+        } catch (Exception ignored) { return "{\"ok\":true}"; }
+    }
+
+    private void queuePacketForConnectedPeers(String json) {
+        JSONObject packet = validatePacket(json);
+        if (packet == null) return;
+        String id = packet.optString("id");
+        synchronized (connections) {
+            for (Connection connection : connections.values()) {
+                if (connection.sentIds.add(id)) {
+                    if (connection.queue.size() >= MAX_PENDING_PER_PEER) {
+                        fail("Nearby peer queue is full; packet was not queued.");
+                        connection.sentIds.remove(id);
+                        continue;
+                    }
+                    if (connection.sentIds.size() > MAX_SEEN_PACKETS) connection.sentIds.clear();
+                    connection.queue.addLast(json);
+                    writeNext(connection);
+                }
+            }
+        }
+    }
+
+    private void writeNext(Connection connection) {
+        if (connection.characteristic == null || connection.frames != null) return;
+        if (connection.queue.isEmpty()) return;
+        String packetJson = connection.queue.pollFirst();
+        JSONObject packet = validatePacket(packetJson);
+        if (packet == null) { writeNext(connection); return; }
+        connection.packetId = packet.optString("id");
+        byte[] bytes = packetJson.getBytes(StandardCharsets.UTF_8);
+        int payloadLimit = Math.max(1, connection.mtu - 3 - FRAME_HEADER_BYTES);
+        int total = (bytes.length + payloadLimit - 1) / payloadLimit;
+        if (total > 2048) { fail("Encrypted packet exceeds the GATT fragmentation limit."); connection.packetId = null; writeNext(connection); return; }
+        int transferId = NEXT_TRANSFER_ID.getAndIncrement() & 0xffff;
+        connection.frames = new byte[total][];
+        connection.frameIndex = 0;
+        for (int i = 0; i < total; i++) {
+            int start = i * payloadLimit;
+            int length = Math.min(payloadLimit, bytes.length - start);
+            byte[] frame = new byte[FRAME_HEADER_BYTES + length];
+            frame[0] = (byte) FRAME_MAGIC_0;
+            frame[1] = (byte) FRAME_MAGIC_1;
+            frame[2] = (byte) ((transferId >>> 8) & 0xff);
+            frame[3] = (byte) (transferId & 0xff);
+            frame[4] = (byte) ((i >>> 8) & 0xff);
+            frame[5] = (byte) (i & 0xff);
+            frame[6] = (byte) ((total >>> 8) & 0xff);
+            frame[7] = (byte) (total & 0xff);
+            System.arraycopy(bytes, start, frame, FRAME_HEADER_BYTES, length);
+            connection.frames[i] = frame;
+        }
+        writeFrame(connection);
+    }
+
+    private void writeFrame(Connection connection) {
+        if (connection.frames == null || connection.characteristic == null) return;
+        if (connection.frameIndex >= connection.frames.length) {
+            connection.frames = null;
+            connection.packetId = null;
+            writeNext(connection);
+            return;
+        }
+        byte[] frame = connection.frames[connection.frameIndex];
+        connection.characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+        connection.characteristic.setValue(frame);
+        try {
+            if (connection.gatt.writeCharacteristic(connection.characteristic)) {
+                // The next frame is sent only after onCharacteristicWrite confirms this one.
+                connection.frameIndex++;
+            } else {
+                fail("Android rejected a BLE packet frame.");
+                disconnect(connection);
+            }
+        } catch (SecurityException exception) {
+            fail("Android denied a BLE packet frame write.");
+            disconnect(connection);
+        }
+    }
+
+    private void disconnect(Connection connection) {
+        synchronized (connections) { connections.remove(connection.address); }
+        try { connection.gatt.disconnect(); connection.gatt.close(); } catch (Exception ignored) { }
+    }
+
+    private void acceptFrame(String address, byte[] frame) {
+        if (frame.length <= FRAME_HEADER_BYTES || frame.length > 512
+                || (frame[0] & 0xff) != FRAME_MAGIC_0 || (frame[1] & 0xff) != FRAME_MAGIC_1) {
+            fail("Rejected an invalid BLE packet frame.");
+            return;
+        }
+        int transferId = ((frame[2] & 0xff) << 8) | (frame[3] & 0xff);
+        int index = ((frame[4] & 0xff) << 8) | (frame[5] & 0xff);
+        int total = ((frame[6] & 0xff) << 8) | (frame[7] & 0xff);
+        if (total < 1 || total > 2048 || index >= total) { fail("Rejected an out-of-range BLE fragment."); return; }
+        byte[] payload = Arrays.copyOfRange(frame, FRAME_HEADER_BYTES, frame.length);
+        byte[] completed = null;
+        synchronized (assemblies) {
+            Assembly assembly = assemblies.get(address);
+            if (assembly == null || assembly.transferId != transferId || assembly.total != total
+                    || System.currentTimeMillis() - assembly.createdAt > 30_000L) {
+                assembly = new Assembly(transferId, total);
+                assemblies.put(address, assembly);
+            }
+            if (assembly.chunks[index] == null) {
+                assembly.chunks[index] = payload;
+                assembly.received++;
+                assembly.byteCount += payload.length;
+            }
+            if (assembly.byteCount > MAX_PACKET_BYTES) { assemblies.remove(address); fail("Rejected an oversized BLE packet."); return; }
+            if (assembly.received == assembly.total) {
+                ByteArrayOutputStream output = new ByteArrayOutputStream(assembly.byteCount);
+                for (byte[] chunk : assembly.chunks) {
+                    if (chunk == null) return;
+                    output.write(chunk, 0, chunk.length);
+                }
+                completed = output.toByteArray();
+                assemblies.remove(address);
+            }
+        }
+        if (completed == null) return;
+        String json = new String(completed, StandardCharsets.UTF_8);
+        JSONObject packet = validatePacket(json);
+        if (packet == null) { fail("Rejected an invalid, expired, or unencrypted BLE packet."); return; }
+        String id = packet.optString("id");
+        synchronized (INBOUND_PACKETS) {
+            if (!INBOUND_IDS.add(id)) return;
+            if (INBOUND_IDS.size() > MAX_SEEN_PACKETS) {
+                java.util.Iterator<String> oldest = INBOUND_IDS.iterator();
+                if (oldest.hasNext()) { oldest.next(); oldest.remove(); }
+            }
+            if (INBOUND_PACKETS.size() >= MAX_INBOUND_PACKETS) INBOUND_PACKETS.removeFirst();
+            INBOUND_PACKETS.addLast(packet.toString());
+        }
+    }
+
+    public static String drainInboundPackets() {
+        JSONArray packets = new JSONArray();
+        synchronized (INBOUND_PACKETS) {
+            while (!INBOUND_PACKETS.isEmpty() && packets.length() < 20) {
+                try { packets.put(new JSONObject(INBOUND_PACKETS.removeFirst())); }
+                catch (Exception ignored) { }
+            }
+        }
+        return packets.toString();
+    }
+
+    private int getConnectedPeerCount() {
+        synchronized (connections) { return connections.size(); }
     }
 
     private boolean hasBluetoothPermissions() {
@@ -169,7 +560,7 @@ public final class BleMeshService extends Service {
     }
 
     private void fail(String message) {
-        error = message == null ? "BLE discovery failed." : message;
+        error = message == null ? "BLE packet transport failed." : message;
         Log.w(TAG, error);
     }
 
@@ -185,8 +576,8 @@ public final class BleMeshService extends Service {
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(this, CHANNEL_ID) : new Notification.Builder(this);
         return builder.setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-                .setContentTitle("ProxiTalk nearby discovery is on")
-                .setContentText("Discovery only — messages are not being relayed yet.")
+                .setContentTitle("ProxiTalk nearby service is on")
+                .setContentText("Encrypted packet carrier active; relay and delivery receipts are not implemented.")
                 .setOngoing(true)
                 .build();
     }
@@ -199,14 +590,19 @@ public final class BleMeshService extends Service {
             PEERS.entrySet().removeIf(entry -> entry.getValue() < cutoff);
             for (int i = 0; i < PEERS.size(); i++) peers.put("Nearby ProxiTalk device");
         }
+        int serverCount;
+        synchronized (SERVER_PEERS) { serverCount = SERVER_PEERS.size(); }
+        BleMeshService service = instance;
+        int clientCount = service == null ? 0 : service.getConnectedPeerCount();
         try {
             result.put("available", true);
             result.put("running", running);
             result.put("scanning", running && scanning);
             result.put("advertising", running && advertising);
             result.put("peerCount", peers.length());
+            result.put("connectedPeerCount", Math.max(serverCount, clientCount));
             result.put("peers", peers);
-            result.put("transport", "discovery-only");
+            result.put("transport", "gatt-packet-prototype");
             result.put("error", error);
             return result.toString();
         } catch (Exception ignored) { return "{}"; }
@@ -215,13 +611,28 @@ public final class BleMeshService extends Service {
     @Override public void onDestroy() {
         running = false;
         handler.removeCallbacks(expirePeers);
-        try { if (scanner != null && scanCallback != null) scanner.stopScan(scanCallback); }
+        try { if (scanner != null && scanCallback != null && scanningInstance) scanner.stopScan(scanCallback); }
         catch (SecurityException ignored) { }
-        try { if (advertiser != null && advertiseCallback != null) advertiser.stopAdvertising(advertiseCallback); }
+        try { if (advertiser != null && advertiseCallback != null && advertisingInstance) advertiser.stopAdvertising(advertiseCallback); }
         catch (SecurityException ignored) { }
+        synchronized (connections) {
+            for (Connection connection : connections.values()) {
+                try { connection.gatt.disconnect(); connection.gatt.close(); } catch (Exception ignored) { }
+            }
+            connections.clear();
+            connecting.clear();
+        }
+        try { if (gattServer != null) gattServer.close(); } catch (SecurityException ignored) { }
+        gattServer = null;
+        scanningInstance = false;
+        advertisingInstance = false;
         scanning = false;
         advertising = false;
         synchronized (PEERS) { PEERS.clear(); }
+        synchronized (SERVER_PEERS) { SERVER_PEERS.clear(); }
+        synchronized (assemblies) { assemblies.clear(); }
+        synchronized (INBOUND_PACKETS) { INBOUND_PACKETS.clear(); INBOUND_IDS.clear(); }
+        if (instance == this) instance = null;
         super.onDestroy();
     }
 

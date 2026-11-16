@@ -23,5 +23,17 @@ const ProxiBLE = (() => {
     if (native) return parse(native.stopBleDiscovery(), { ok: true, state: 'stopping' });
     return { ok: false, error: 'Native Android BLE discovery is unavailable in this web build.' };
   }
-  return Object.freeze({ detect, getStatus, startScan, stopScan });
+  function sendPacket(packet) {
+    const native = bridge();
+    if (!native || typeof native.sendBlePacket !== 'function') return { ok: false, error: 'Native BLE packet transport is unavailable.' };
+    try { return parse(native.sendBlePacket(JSON.stringify(packet)), { ok: false, error: 'Native BLE transport returned an invalid result.' }); }
+    catch (_) { return { ok: false, error: 'Could not pass an encrypted packet to Android BLE.' }; }
+  }
+  function drainPackets() {
+    const native = bridge();
+    if (!native || typeof native.drainBlePackets !== 'function') return [];
+    const packets = parse(native.drainBlePackets(), []);
+    return Array.isArray(packets) ? packets : [];
+  }
+  return Object.freeze({ detect, getStatus, startScan, stopScan, sendPacket, drainPackets });
 })();

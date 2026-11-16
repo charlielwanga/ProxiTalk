@@ -1,23 +1,24 @@
 # ProxiTalk Android — Android 13 test target
 
-The selected product direction is hybrid: internet delivery when available and native BLE relay when offline. **Android 13 (API 33) is the first physical test target.** Web-to-Android online text delivery has been observed and acknowledged. The native app now includes an opt-in foreground BLE discovery prototype; this is not yet a message transport.
+The selected product direction is hybrid: internet delivery when available and native BLE relay when offline. **Android 13 (API 33) is the first physical test target.** Web-to-Android online text delivery has been observed and acknowledged. The native app now includes an opt-in foreground BLE/GATT packet-carrier prototype; this is not yet an authenticated user-message transport.
 
 ## Current Android build
 
 - `MainActivity.java` serves bundled web assets from `https://appassets.androidplatform.net`, restricts navigation to the bundled app, and accepts the narrow Supabase PKCE callback.
-- `BleMeshService.java` starts only after the user opts in, requests the Android BLE permissions, advertises/scans a ProxiTalk service UUID at low power, and displays an ongoing foreground notification. It exposes an anonymous count of recently seen ProxiTalk BLE advertisers; no device addresses or names are sent to JavaScript.
-- BLE discovery has no GATT connection, packet transfer, message delivery, background store-and-forward, or cloud fallback yet. Do not describe it as offline messaging.
+- `BleMeshService.java` starts only after the user opts in, requests Android BLE permissions, advertises/scans at low power, and displays an ongoing foreground notification. It exposes only an anonymous peer count; device addresses/names stay native.
+- The GATT prototype accepts bounded, fragmented JSON envelopes that contain only recipient-key-encrypted ciphertext plus routing metadata. It rejects plaintext `text`/`body` fields and expired packets.
+- This is still an unauthenticated, one-hop carrier experiment: no sender identity proof, chat receive/send integration, recipient delivery receipt, durable storage, relay, or cloud fallback. Do not describe it as offline messaging.
 - `AndroidManifest.xml` declares Android 12+ BLE permissions, the connected-device foreground service and notifications. `allowBackup` remains disabled because the device key is non-exportable and cannot currently be recovered.
 - `npm run build:android` builds the web app and copies it into ignored `android/app/src/main/assets/www/` assets.
 - `.github/workflows/android-debug-apk.yml` builds a sideloadable debug APK through CI. It is not Play Store/release signed.
 
-## BLE discovery test
+## BLE/GATT carrier validation
 
-1. Build and install a compatible test APK on two real Android devices with BLE support.
-2. Sign in to real accounts, confirm each profile/key remains present, then open **Nearby discovery (Android)** in the map panel on both devices.
-3. Grant the requested Nearby devices permissions and keep both apps in the foreground for the first test. The Android ongoing notification should say discovery is on; the panel should show a peer count after scanning.
-4. Turn discovery off in the panel and verify the notification stops. Test permission denial, Bluetooth off, and a device without BLE.
-5. Discovery is the only behavior tested here: no text or encrypted payload moves between the devices yet.
+1. Use two real Android devices with BLE support and compatible test APKs. Protect existing device-bound keys; do not uninstall/reinstall without a verified update path.
+2. Sign in to real accounts and confirm profile/key state before enabling **Nearby BLE (Android)** on both devices.
+3. Grant the requested Nearby devices permissions. Keep both apps open for the first test; confirm the ongoing notification, anonymous peer count, and GATT connection count.
+4. The transport bridge exposes `sendBlePacket`/`drainBlePackets` for encrypted-envelope testing. No chat messages are integrated yet. Test invalid/expired/plaintext payload rejection, frame reassembly, permission denial, Bluetooth off, and disconnects.
+5. A GATT write is only a radio-hop transfer, not proof of recipient decryption or delivery. Sender authentication, end-to-end receipts, durable store-and-forward, and multi-hop routing remain unimplemented.
 
 ## Key and APK update safety
 
@@ -25,10 +26,10 @@ Each authenticated device has its own non-exportable private key in the app's lo
 
 ## Next native milestones
 
-1. Add a reviewed packet format with recipient IDs, expiry, hop limits, unique IDs, and app-layer recipient-key encryption.
-2. Implement authenticated GATT packet exchange and bounded fragmentation/reassembly.
-3. Add local encrypted store-and-forward, deduplication, and recipient acknowledgements without losing drafts.
-4. Test online fallback, permission denial, interrupted transfers, duplicate/reordered frames, background/force-stop, and battery behavior on two Android 13 devices.
+1. Review sender authentication that works offline; recipient encryption alone does not prevent sender spoofing.
+2. Wire verified packet send/receive into chat without treating GATT writes as delivered messages.
+3. Add authenticated recipient acknowledgements, deduplication, bounded expiry, and encrypted durable store-and-forward.
+4. Test permission denial, interrupted/reordered frames, force-stop/background, battery behavior, and online fallback on two Android 13 devices.
 5. Obtain a threat-model/security review before describing offline relay as usable.
 
 ## Build the test APK

@@ -57,6 +57,26 @@ function cryptoHarness(source) {
   });
 }
 
+test('BLE bridge wrapper only exposes native packet APIs when the Android bridge is present', async () => {
+  const source = await read('js/ble.js');
+  const sent = [];
+  const packet = { v: 1, id: 'packet-id' };
+  const ble = runInNewContext(source + String.fromCharCode(10) + 'ProxiBLE', {
+    window: { ProxiTalkNative: {
+      getBleStatus: () => JSON.stringify({ available: true, running: true, connectedPeerCount: 1 }),
+      startBleDiscovery: () => JSON.stringify({ ok: true }),
+      stopBleDiscovery: () => JSON.stringify({ ok: true }),
+      sendBlePacket: value => { sent.push(JSON.parse(value)); return JSON.stringify({ ok: true, connectedPeerCount: 1 }); },
+      drainBlePackets: () => JSON.stringify([{ v: 1, id: 'received' }]),
+    } }, JSON,
+  });
+  assert.equal(ble.detect(), 'native-discovery');
+  assert.equal(ble.getStatus().connectedPeerCount, 1);
+  assert.equal(ble.sendPacket(packet).ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), packet);
+  assert.equal(ble.drainPackets()[0].id, 'received');
+});
+
 test('recipient-only encryption and device-local history encryption round-trip', async () => {
   const cryptoSource = await read('js/crypto.js');
   const alice = cryptoHarness(cryptoSource);
@@ -167,7 +187,7 @@ test('message transport encrypts before insert and scopes message policies to pa
   assert.match(migration, /expires_at <= created_at \+ interval '14 days'/);
 });
 
-test('Android BLE milestone is opt-in discovery only and does not claim message transport', async () => {
+test('Android BLE GATT carrier only accepts bounded recipient-key-encrypted packet envelopes', async () => {
   const manifest = await read('android/AndroidManifest.xml');
   const service = await read('android/app/src/main/java/com/proxitalk/app/BleMeshService.java');
   const activity = await read('android/app/src/main/java/com/proxitalk/app/MainActivity.java');
@@ -179,12 +199,21 @@ test('Android BLE milestone is opt-in discovery only and does not claim message 
   assert.match(manifest, /android:name="\.BleMeshService"[\s\S]*?android:exported="false"/);
   assert.match(service, /startAdvertising\(\)/);
   assert.match(service, /startScanning\(\)/);
-  assert.match(service, /setConnectable\(false\)/);
-  assert.match(service, /"discovery-only"/);
+  assert.match(service, /setConnectable\(true\)/);
+  assert.match(service, /openGattServer\(\)/);
+  assert.match(service, /MAX_PACKET_BYTES = 16 \* 1024/);
+  assert.match(service, /FRAME_HEADER_BYTES = 8/);
+  assert.match(service, /ECDH-P256\/HKDF-SHA256\/AES-256-GCM/);
+  assert.match(service, /Arrays\.asList\("v", "id", "sender_id", "recipient_id", "created_at", "expires_at", "hops", "ciphertext"\)/);
+  assert.match(service, /Arrays\.asList\("kty", "crv", "x", "y", "ext", "key_ops"\)/);
+  assert.doesNotMatch(service, /ephemeral\.optString\("d"\)/);
   assert.match(activity, /requestOrStartMesh\(\)/);
-  assert.match(ble, /startBleDiscovery/);
-  assert.match(html, /Discovery only:[^<]*does not send or relay messages over Bluetooth/);
-  assert.doesNotMatch(service, /BluetoothGattServer|sendPacket/);
+  assert.match(activity, /sendBlePacket\(String encryptedPacketJson\)/);
+  assert.match(activity, /drainBlePackets\(\)/);
+  assert.match(ble, /sendBlePacket/);
+  assert.match(ble, /drainBlePackets/);
+  assert.match(html, /sender authentication, delivery receipts, and relay\/store-and-forward are still missing/);
+  assert.doesNotMatch(service, /Store-and-forward is implemented/);
 });
 
 test('Android 13 app shell uses a secure asset origin and a narrow PKCE deep link', async () => {
@@ -226,7 +255,7 @@ test('static build includes the complete application shell and service worker ne
     await assert.doesNotReject(access(resolve(root, file)), file);
   }
   const sw = await read('dist/sw.js');
-  assert.match(sw, /const CACHE = 'proxitalk-shell-v8'/);
+  assert.match(sw, /const CACHE = 'proxitalk-shell-v9'/);
   const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
   assert.ok(assetList, 'service worker should declare its precache list');
   const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);

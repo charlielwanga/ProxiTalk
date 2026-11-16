@@ -158,11 +158,11 @@
     </div>
 
     <div class="panel-section">
-      <h4>📡 Nearby discovery (Android)</h4>
-      <p id="bleStatus" class="muted" role="status" aria-live="polite">Native BLE discovery is available only in the Android app.</p>
-      <button class="btn-primary" id="bleStartBtn" type="button">Enable nearby discovery</button>
-      <button class="btn-primary hidden" id="bleStopBtn" type="button">Stop nearby discovery</button>
-      <p class="muted">Discovery only: this build does not send or relay messages over Bluetooth. Discovery stays on only while you enable it.</p>
+      <h4>📡 Nearby BLE (Android)</h4>
+      <p id="bleStatus" class="muted" role="status" aria-live="polite">Native BLE is available only in the Android app.</p>
+      <button class="btn-primary" id="bleStartBtn" type="button">Enable nearby BLE</button>
+      <button class="btn-primary hidden" id="bleStopBtn" type="button">Stop nearby BLE</button>
+      <p class="muted">The Android prototype can carry bounded recipient-key-encrypted packets one hop. User messages are not routed over BLE yet: sender authentication, delivery receipts, and relay/store-and-forward are still missing. Discovery stays on only while you enable it.</p>
     </div>
 
     <div class="panel-section">
@@ -194,7 +194,7 @@
 
     <div class="panel-section">
       <h4>Transport status</h4>
-      <p class="muted">The Web build has no Bluetooth transport. The Android app has opt-in BLE discovery only; packet transfer and offline messaging are not implemented.</p>
+      <p class="muted">The Web build has no Bluetooth transport. The Android app has an opt-in GATT packet carrier prototype; it is not an authenticated chat or offline delivery path.</p>
     </div>
   </aside>
 </div>

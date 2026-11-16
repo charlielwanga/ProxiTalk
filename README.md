@@ -15,7 +15,7 @@ This is an early-access implementation, **not yet production-ready**. One real W
 
 ## Not available
 
-- Offline messaging is not available. The Android test app has an opt-in foreground BLE discovery prototype (advertises/scans a ProxiTalk service UUID and shows nearby-device counts), but it does not connect to peers, transfer packets, relay messages, or store-and-forward. Wi-Fi Direct and iOS are also not implemented.
+- Offline messaging is not available. The Android test app has an opt-in foreground BLE/GATT carrier prototype with bounded fragmentation for recipient-key-encrypted packet envelopes. It does not authenticate the sender, route app messages, issue recipient delivery receipts, relay/store-and-forward, or fall back to cloud. Wi-Fi Direct and iOS are also not implemented.
 - Encrypted groups, attachments/media delivery, voice/video calls, SMS, push notifications, read receipts, or actual emergency/SOS broadcasts.
 - Account/device key recovery, multi-device history, key rotation, and automatic identity verification. A new browser/device cannot decrypt messages for an existing device key.
 - Abuse reporting/moderation, rate limits for message creation, support, observability, backups/retention operations, or a reviewed incident-response process.
@@ -50,7 +50,7 @@ Before a public production launch:
 2. Complete a two-real-account test on separate browsers/devices: email verification, profile creation, ID lookup, encrypted send/receive, expiry, sign-out, refresh, and unauthorized-access attempts. Do this without demo accounts or seeded messages.
 3. Obtain an independent cryptographic/security review; define key verification, rotation, recovery, deletion, retention, and incident response.
 4. Add server-side quotas/abuse protection and scheduled expiration cleanup; test RLS and grants with anonymous, unrelated authenticated, sender, and recipient identities.
-5. Product direction is **hybrid online + offline mesh**. Android 13/API 33 is the confirmed first device target. The online one-to-one path has now been exercised between Web and Android. The Android app has an opt-in BLE discovery prototype, which still needs two-device validation; next implement authenticated GATT packet exchange, recipient delivery acknowledgements, deduplication, expiry, and store-and-forward. Do not describe BLE discovery as offline messaging. iOS remains a separate later platform decision.
+5. Product direction is **hybrid online + offline mesh**. Android 13/API 33 is the confirmed first device target. The online one-to-one path has been exercised between Web and Android. The Android app has an opt-in GATT packet-carrier prototype for recipient-key-encrypted envelopes; it still needs two-device validation and sender authentication. Next add a reviewed sender-authentication design, app-level receive/send integration, delivery acknowledgements, deduplication, expiry, and store-and-forward. Do not describe the current GATT prototype as usable offline messaging. iOS remains a separate later platform decision.
 6. Add accessibility/device/browser testing, backups and restore drills, privacy/legal review, release monitoring, and a user-support process.
 
 The Android host is still partial, and this environment does not have Java/Gradle to verify a native release build.

@@ -8,9 +8,9 @@ Browser sessions persist in the current browser profile. Device ECDH private key
 
 ## Android host and BLE discovery
 
-The Android module serves bundled assets through `WebViewAssetLoader` and limits the native JavaScript bridge to the app origin. Email PKCE redirects use a narrowly scoped custom URI. The new BLE milestone is opt-in and foreground-only: `BleMeshService` advertises a service UUID and scans for nearby devices using Android BLE permissions. It reports a count only; it does not expose device addresses/names to JavaScript.
+The Android module serves bundled assets through `WebViewAssetLoader` and limits the native JavaScript bridge to the app origin. Email PKCE redirects use a narrowly scoped custom URI. The opt-in foreground BLE service advertises/scans a ProxiTalk UUID and opens a GATT characteristic for bounded packet transfer. It reports only an anonymous peer count; device addresses/names stay native.
 
-**There is no GATT connection, packet transfer, message relay, or store-and-forward yet.** BLE discovery does not mean messages can be sent offline. Android 13 is the confirmed first native target; iOS is not scoped for this milestone.
+The GATT prototype accepts short-lived, recipient-key-encrypted JSON envelopes and fragments/reassembles them under a byte cap. It rejects plaintext text/body fields. It does **not** authenticate sender identity, route chat messages, acknowledge recipient decryption, durably store packets, relay them, or fall back to cloud. Do not present this carrier as offline messaging. Android 13 is the first native target; iOS is not scoped for this milestone.
 
 ## Security and operational boundary
 
@@ -22,8 +22,8 @@ The Android module serves bundled assets through `WebViewAssetLoader` and limits
 
 ## Remaining implementation sequence
 
-1. Validate opt-in BLE discovery on two Android 13 devices, including permissions denied/off and Bluetooth disabled.
-2. Review a bounded opaque-packet protocol: recipient identity, expiry, TTL/hop limit, deduplication ID, and acknowledgements. Keep recipient-only encryption.
-3. Implement GATT exchange and bounded fragmentation/reassembly; test both directions and interruption.
-4. Add encrypted local store-and-forward and delivery confirmation, then cloud fallback and expiry cleanup.
-5. Complete the two-real-account auth/message acceptance matrix, independent security review, and production operations before launch.
+1. Validate opt-in BLE/GATT transfer on two Android 13 devices, including permission denial, Bluetooth disabled, interrupted/reordered frames, and oversize rejection.
+2. Design offline sender authentication. Recipient-only encryption provides confidentiality but not sender authenticity.
+3. Integrate verified packet send/receive into chat and add recipient-decryption acknowledgements.
+4. Add deduplication, encrypted durable store-and-forward, hop/expiry limits, cloud fallback, and cleanup.
+5. Complete the two-real-account acceptance matrix, independent security review, and production operations before launch.

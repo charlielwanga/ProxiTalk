@@ -265,5 +265,13 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> stopMeshService());
             return "{\"ok\":true,\"state\":\"stopping\"}";
         }
+
+        @JavascriptInterface
+        public String sendBlePacket(String encryptedPacketJson) {
+            return BleMeshService.enqueuePacket(encryptedPacketJson);
+        }
+
+        @JavascriptInterface
+        public String drainBlePackets() { return BleMeshService.drainInboundPackets(); }
     }
 }
