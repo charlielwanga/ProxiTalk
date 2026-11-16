@@ -96,6 +96,29 @@ test('mailbox send accepts UI camelCase and database snake_case contact keys', a
   assert.equal(JSON.parse(requests[1].options.body).recipient_id, 'recipient-b');
 });
 
+test('authentication restores a saved session from persistent browser storage after reload', async () => {
+  const source = await read('js/auth.js');
+  const persistent = new Map([['proxitalk_auth_session_v1', JSON.stringify({ access_token: 'saved-token', refresh_token: 'saved-refresh', expires_at: Date.now() + 300000 })]]);
+  const tabStorage = new Map();
+  const storage = map => ({
+    getItem: key => map.get(key) ?? null,
+    setItem: (key, value) => map.set(key, String(value)),
+    removeItem: key => map.delete(key),
+  });
+  const auth = runInNewContext(source + String.fromCharCode(10) + 'ProxiAuth', {
+    window: { ProxiTalkConfig: { supabaseUrl: 'https://example.invalid', publishableKey: 'test-publishable' } },
+    localStorage: storage(persistent), sessionStorage: storage(tabStorage),
+    crypto: webcrypto, location: { href: 'https://proxitalk.example/', origin: 'https://proxitalk.example', pathname: '/' },
+    history: { replaceState() {} }, URL, URLSearchParams, TextEncoder, btoa, fetch: async () => ({
+      ok: true, async text() { return JSON.stringify({ id: 'user-1', email: 'person@example.com' }); },
+    }),
+  });
+  const user = await auth.initialize();
+  assert.equal(user.id, 'user-1');
+  assert.equal(auth.isSignedIn(), true);
+  assert.equal(persistent.has('proxitalk_auth_session_v1'), true);
+});
+
 test('fresh installs have no seeded conversations or fake network replies', async () => {
   const app = await read('js/app.js');
   assert.match(app, /Store\.load\('contacts', \[\]\)/);
@@ -110,6 +133,9 @@ test('browser connects only through the authenticated Supabase client and limits
   const auth = await read('js/auth.js');
   assert.match(auth, /code_challenge_method: 's256'/);
   assert.match(auth, /grant_type=pkce/);
+  assert.match(auth, /localStorage\.getItem\(STORAGE_KEY\)/);
+  assert.match(auth, /localStorage\.setItem\(STORAGE_KEY, serialized\)/);
+  assert.match(auth, /sessionStorage\.getItem\(STORAGE_KEY\)/);
   assert.match(html, /js\/auth\.js/);
   assert.match(html, /js\/cloud\.js/);
   assert.match(html, /js\/crypto\.js/);
@@ -180,7 +206,7 @@ test('static build includes the complete application shell and service worker ne
     await assert.doesNotReject(access(resolve(root, file)), file);
   }
   const sw = await read('dist/sw.js');
-  assert.match(sw, /const CACHE = 'proxitalk-shell-v6'/);
+  assert.match(sw, /const CACHE = 'proxitalk-shell-v7'/);
   const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
   assert.ok(assetList, 'service worker should declare its precache list');
   const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);

@@ -8,11 +8,31 @@ const ProxiAuth = (() => {
   let callbackError = '';
 
   function readSavedSession() {
-    try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null'); } catch (_) { return null; }
+    try {
+      const persistent = localStorage.getItem(STORAGE_KEY);
+      if (persistent) return JSON.parse(persistent);
+    } catch (_) {}
+    // Migrate sessions created by older builds, which only survived the current tab.
+    try {
+      const legacy = sessionStorage.getItem(STORAGE_KEY);
+      if (!legacy) return null;
+      const value = JSON.parse(legacy);
+      try { localStorage.setItem(STORAGE_KEY, legacy); sessionStorage.removeItem(STORAGE_KEY); } catch (_) {}
+      return value;
+    } catch (_) { return null; }
   }
   function saveSession(value) {
     session = value;
-    try { value ? sessionStorage.setItem(STORAGE_KEY, JSON.stringify(value)) : sessionStorage.removeItem(STORAGE_KEY); } catch (_) {}
+    try {
+      if (value) {
+        const serialized = JSON.stringify(value);
+        try { localStorage.setItem(STORAGE_KEY, serialized); sessionStorage.removeItem(STORAGE_KEY); }
+        catch (_) { sessionStorage.setItem(STORAGE_KEY, serialized); }
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
+        sessionStorage.removeItem(STORAGE_KEY);
+      }
+    } catch (_) {}
   }
   function saveVerifier(value) {
     try { localStorage.setItem(PKCE_KEY, JSON.stringify({ value, createdAt: Date.now() })); } catch (_) {}
