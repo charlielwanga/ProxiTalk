@@ -2,7 +2,7 @@
 const CACHE = 'proxitalk-preview-v3';
 const ASSETS = [
   './', './index.html', './manifest.json', './assets/icon.svg',
-  './css/style.css', './js/storage.js', './js/i18n.js', './js/mesh.js', './js/app.js',
+  './css/style.css', './js/storage.js', './js/mesh.js', './js/app.js',
 ];
 
 self.addEventListener('install', event => {

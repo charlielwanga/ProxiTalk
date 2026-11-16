@@ -17,7 +17,7 @@ Then open `http://localhost:8000`. The deployable static output is `dist/`.
 
 ## GitHub Pages
 
-A GitHub Actions workflow builds and deploys the static site from `main` or this work branch. Pages must be enabled for the repository with **GitHub Actions** as the build source. The static site is also compatible with Vercel (`npm run build`, output directory `dist`); `vercel.json` adds basic browser security headers.
+The repository's current Pages configuration publishes the root of `arena/306f28c7-proxitalk` using GitHub Pages' branch-based build. The root `index.html` is the app entry point. `npm run build` also produces a trimmed `dist/` bundle for Vercel (`npm run build`, output directory `dist`); `vercel.json` adds browser security headers. The `Verify ProxiTalk preview` workflow runs the build and tests on pushes.
 
 ## What currently works
 

@@ -34,8 +34,16 @@ test('message composer clearly reports local-only behavior', async () => {
   assert.match(app, /not end-to-end encrypted/);
 });
 
-test('static build contains only the deployable site assets', async () => {
+test('static build contains only the deployable site assets and its service-worker cache is complete', async () => {
   for (const file of ['dist/index.html', 'dist/manifest.json', 'dist/sw.js', 'dist/css/style.css', 'dist/js/app.js', 'dist/assets/icon.svg']) {
     await assert.doesNotReject(access(resolve(root, file)), file);
+  }
+  const sw = await read('dist/sw.js');
+  const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
+  assert.ok(assetList, 'service worker should declare its precache list');
+  const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
+  for (const asset of assets) {
+    if (asset === './') continue;
+    await assert.doesNotReject(access(resolve(root, 'dist', asset.slice(2))), `precache asset ${asset}`);
   }
 });
