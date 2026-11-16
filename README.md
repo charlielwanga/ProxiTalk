@@ -1,40 +1,56 @@
-# ProxiTalk — local-first messaging prototype
+# ProxiTalk — early-access encrypted messaging
 
-ProxiTalk explores a future offline-first messenger for communities with unreliable connectivity. **This build is a local UI preview, not a working messaging service.** It does not send messages to other people, establish Bluetooth/Wi-Fi mesh links, provide end-to-end encryption, or deliver emergency alerts. Do not use it for sensitive communication or emergencies.
+ProxiTalk now has an initial **one-to-one, internet-delivered text-message path**. Users sign in with an email magic link, create a ProxiTalk ID, look up another ID, and send recipient-key-encrypted text through an authenticated Supabase mailbox. The mailbox stores ciphertext; it is not a Bluetooth mesh network.
 
-The web preview intentionally starts with no sample users or conversations. Contacts, draft messages, and attachments are saved in the current browser's local storage only. A message composer confirmation explicitly says that a message was not sent.
+This is an early-access implementation, **not yet production-ready**. It has not passed a two-real-user end-to-end acceptance test, independent cryptographic/security review, or production operations review. Do not use it for emergencies or high-risk communication.
+
+## Current scope
+
+- Email magic-link sign-in and public ProxiTalk ID directory.
+- One-to-one text messages over the internet. Browser Web Crypto uses ephemeral P-256 ECDH, HKDF-SHA-256, and AES-256-GCM; the server receives an encrypted envelope.
+- Recipient polling and authenticated row-level security for directory and mailbox records. Messages expire from the pending query after 14 days; expired-row cleanup/retention automation is not yet configured.
+- Non-extractable device ECDH private key stored in IndexedDB. Signed-in local chat history is encrypted at rest with a device-derived key; local contacts/IDs remain in browser storage.
+- Empty-by-default installation; there are no seeded/demo accounts, contacts, or conversations.
+- Offline use permits local drafts only. A draft is not delivered automatically when connectivity returns.
+
+## Not available
+
+- Bluetooth/Wi-Fi Direct advertising, scanning, relay, and store-and-forward. An Android 13 WebView/app/deep-link scaffold exists, but is not release-verified; there is no BLE runtime or iOS app yet.
+- Encrypted groups, attachments/media delivery, voice/video calls, SMS, push notifications, read receipts, or actual emergency/SOS broadcasts.
+- Account/device key recovery, multi-device history, key rotation, and automatic identity verification. A new browser/device cannot decrypt messages for an existing device key.
+- Abuse reporting/moderation, rate limits for message creation, support, observability, backups/retention operations, or a reviewed incident-response process.
+
+Compare a contact's key fingerprint out of band before relying on identity. The service can expose directory metadata (ProxiTalk IDs, display names, public keys, sender/recipient IDs, and message timing). Browser compromise, malicious updates, or a compromised endpoint can expose message contents. This code has not had an independent security audit.
 
 ## Run locally
 
 ```sh
-npm ci
+npm run build:android
 npm test
-npm run build
 npm run preview
 ```
 
-Then open `http://localhost:8000`. The deployable static output is `dist/`.
+Open `http://localhost:8000`. Use `npm run dev` for the root site. `dist/` is the deployable static bundle. The service worker caches only the application shell and never caches auth/API requests.
 
-## GitHub Pages
+## Deployment and backend
 
-The repository's current Pages configuration publishes the root of `arena/306f28c7-proxitalk` using GitHub Pages' branch-based build. The root `index.html` is the app entry point. `npm run build` also produces a trimmed `dist/` bundle for Vercel (`npm run build`, output directory `dist`); `vercel.json` adds browser security headers. The `Verify ProxiTalk preview` workflow runs the build and tests on pushes.
+- GitHub Pages is the current hosting target; root `index.html` is served by the repository's Pages configuration. Vercel can use `npm run build` and `dist` as its output directory.
+- The browser uses the Supabase **publishable** key in `js/config.js`. That key is intended to be public. Never add a secret/service-role key to client code. Database RLS policies—not key secrecy—must protect user data.
+- Supabase migrations are recorded under `supabase/migrations/`; the authenticated directory/mailbox migration has been applied to project `hsgcsyhyzsftinisksty`.
+- Supabase Auth's site URL and redirect allow-list include the current GitHub Pages URL and Android callback URI. Email confirmation remains enabled. Configure and verify a production SMTP sender before inviting general users; the default Supabase mailer is not an appropriate production mail-delivery setup.
+- `.github/workflows/android-debug-apk.yml` builds a sideloadable debug APK on pushes to this branch or manual dispatch. It has not run yet; the artifact is for device testing only, not a release-signed app.
 
-## What currently works
+## Verification and release gates
 
-- Empty-by-default local contact and conversation interface.
-- Draft text and attachments are stored in this browser only.
-- Installable/offline web shell for the local interface.
-- Static build and smoke tests.
+`npm test` checks JavaScript parsing, empty-by-default behavior, encryption-path wiring, SQL/RLS policy presence, feature disclosures, and static-bundle/service-worker completeness. These are code-level checks only; they do **not** prove live signup, two-user message delivery, confidentiality, abuse resistance, or operational readiness.
 
-## Not implemented / intentionally disabled
+Before a public production launch:
 
-- Real Bluetooth advertising, scanning, peer discovery, and store-and-forward delivery. Web Bluetooth browser APIs alone do not provide the required background mesh behavior; the Android bridge remains a stub.
-- Authenticated account onboarding, cloud sync, per-user access control, device key exchange, recipient-verifiable E2E encryption, and multi-device message history.
-- Voice calls, SMS delivery/provider integration, and actual emergency broadcast.
-- Android release signing and Play Store readiness.
+1. Configure production SMTP, CAPTCHA/abuse controls, allowed origins/redirects, support contact, and service monitoring.
+2. Complete a two-real-account test on separate browsers/devices: email verification, profile creation, ID lookup, encrypted send/receive, expiry, sign-out, refresh, and unauthorized-access attempts. Do this without demo accounts or seeded messages.
+3. Obtain an independent cryptographic/security review; define key verification, rotation, recovery, deletion, retention, and incident response.
+4. Add server-side quotas/abuse protection and scheduled expiration cleanup; test RLS and grants with anonymous, unrelated authenticated, sender, and recipient identities.
+5. Product direction is **hybrid online + offline mesh**. Android 13/API 33 is the confirmed first device target. The next milestone is validating the secure Android app shell/deep-link auth on two real devices, then implement Android BLE transport; iOS remains a separate later platform decision.
+6. Add accessibility/device/browser testing, backups and restore drills, privacy/legal review, release monitoring, and a user-support process.
 
-The earlier UI prototype used synthetic contacts, simulated peers, fabricated delivery confirmations, and open anonymous database policies. Those values have been removed from the served build. The Supabase tables have been locked down and its gateway/SMS functions disabled until authentication and authorization are implemented. No Supabase credentials or network client are shipped in the browser build.
-
-## Current deployment boundary
-
-Hosting this static bundle makes the **preview** public; it does not make ProxiTalk's transport or backend production-ready. Before real users or messages, implement and review account/identity flows, least-privilege RLS policies, key exchange and recovery, native Android BLE advertising/foreground relaying, privacy/retention rules, abuse protection, and end-to-end device tests.
+The Android host is still partial, and this environment does not have Java/Gradle to verify a native release build.

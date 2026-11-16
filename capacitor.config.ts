@@ -1,19 +1,14 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
+// Configuration draft only: Capacitor dependencies and native projects are not
+// installed yet. `npm run build` creates the static bundle in `dist/`.
 const config: CapacitorConfig = {
   appId: 'com.proxitalk.app',
   appName: 'ProxiTalk',
-  webDir: '.',
+  webDir: 'dist',
   server: {
     androidScheme: 'https',
-    // Allow Web Bluetooth + WebRTC on the Capacitor origin
     cleartext: false,
-  },
-  plugins: {
-    BluetoothLe: {
-      // ProxiTalk Mesh service UUID
-      serviceUuid: '0000feaa-0000-1000-8000-00805f9b34fb',
-    },
   },
 };
 

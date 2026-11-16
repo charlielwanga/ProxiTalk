@@ -1,8 +1,9 @@
-/* ProxiTalk local-preview service worker. No message/API requests are cached. */
-const CACHE = 'proxitalk-preview-v4';
+/* ProxiTalk application-shell cache only. Auth, API, and message requests are never cached. */
+const CACHE = 'proxitalk-shell-v5';
 const ASSETS = [
   './', './index.html', './manifest.json', './assets/icon.svg',
-  './css/style.css', './js/storage.js', './js/mesh.js', './js/app.js',
+  './css/style.css', './js/config.js', './js/storage.js', './js/crypto.js',
+  './js/auth.js', './js/cloud.js', './js/mesh.js', './js/app.js',
 ];
 
 self.addEventListener('install', event => {

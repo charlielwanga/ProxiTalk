@@ -3,15 +3,36 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>ProxiTalk — Offline Mesh Messenger</title>
-<meta name="description" content="ProxiTalk early-access local-first messaging prototype. Messages stay in this browser and are not transmitted.">
+<title>ProxiTalk — Encrypted Online Messaging</title>
+<meta name="description" content="ProxiTalk encrypted online messaging. Sign in with email and share your ProxiTalk ID to chat.">
 <meta name="theme-color" content="#0B3D3A">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://hsgcsyhyzsftinisksty.supabase.co wss://hsgcsyhyzsftinisksty.supabase.co; media-src 'self' blob:; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%2300C2A8'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'>P</text></svg>">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+
+<div id="authOverlay" class="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+  <section class="auth-card">
+    <div class="auth-mark">◉</div>
+    <h1 id="authTitle">Welcome to ProxiTalk</h1>
+    <p id="authIntro">Sign in with your email to create an encrypted messaging identity.</p>
+    <form id="authForm">
+      <label for="authEmail">Email address</label>
+      <input id="authEmail" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com">
+      <button class="btn-primary" type="submit">Email me a sign-in link</button>
+    </form>
+    <p id="authStatus" class="auth-status" role="status" aria-live="polite"></p>
+    <button id="continueOffline" class="auth-offline" type="button">Continue to local drafts without sign-in</button>
+    <form id="profileForm" class="hidden">
+      <label for="profileName">Your display name</label>
+      <input id="profileName" type="text" autocomplete="name" required maxlength="48" placeholder="Name people will recognize">
+      <button class="btn-primary" type="submit">Create my ProxiTalk ID</button>
+    </form>
+    <p class="auth-footnote">Messages sent online are encrypted for the recipient. Your device key stays on this device. Keep access to this browser profile; key recovery and offline Bluetooth relaying are still being developed.</p>
+  </section>
+</div>
 
 <!-- ══════════ TOP BAR ══════════ -->
 <header id="topbar">
@@ -19,16 +40,16 @@
     <div class="brand-icon">◉</div>
     <div class="brand-text">
       <strong>ProxiTalk</strong>
-      <span id="brand-sub">Local-only preview · Not connected</span>
+      <span id="brand-sub">Encrypted online messaging · Mesh in development</span>
     </div>
   </div>
 
   <div class="topbar-center">
     <div class="mesh-pill" id="meshPill" title="Current transport status">
-      <span id="meshPillText">Local preview · not connected</span>
+      <span id="meshPillText">Sign in to message</span>
     </div>
     <div class="mesh-pill" id="queuePill" title="Local drafts, not transmitted">
-      📦 <span id="queueCount">0 transport packets</span>
+      📦 <span id="queueCount">0 local drafts</span>
     </div>
   </div>
 
@@ -39,7 +60,7 @@
   </div>
 </header>
 
-<div class="preview-notice" role="status">Early-access preview: local-only. Messages are not transmitted or protected for real-world use.</div>
+    <div class="preview-notice" role="status">Early access: one-to-one online text is recipient-key encrypted. Attachments, groups, calls, and offline mesh are not available.</div>
 
 <!-- ══════════ MAIN LAYOUT ══════════ -->
 <div id="layout">
@@ -80,14 +101,14 @@
       <div class="empty-hero">
         <div class="empty-icon">📡</div>
         <h2>ProxiTalk</h2>
-        <p>A local-first messaging prototype. No live account or transport is connected yet.</p>
+        <p>Secure one-to-one online messaging is being built first. Offline Bluetooth relaying is still in development.</p>
         <div class="empty-features">
-          <div>🗂️ Contacts and drafts stay in this browser</div>
-          <div>📡 Bluetooth mesh is not active in this web preview</div>
-          <div>☁️ Cloud sync is disabled until secure sign-in is configured</div>
-          <div>⚠️ Not for emergencies or sensitive messages</div>
+          <div>🔐 Recipient-key encrypted online messages</div>
+          <div>🪪 Sign in and share your ProxiTalk ID with a contact</div>
+          <div>📦 Outgoing drafts stay local if the network is unavailable</div>
+          <div>📡 Bluetooth mesh and multi-hop delivery are not ready yet</div>
         </div>
-        <p class="empty-hint">Add a contact to explore the local interface. Messages will not be delivered.</p>
+        <p class="empty-hint">Sign in, then start a chat with a verified ProxiTalk ID.</p>
       </div>
     </div>
 
@@ -115,7 +136,7 @@
         <button class="icon-btn" id="emojiBtn" title="Emoji">😊</button>
         <button class="icon-btn" id="attachBtn" title="Attach photo / file">📎</button>
         <input type="file" id="fileInput" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.zip" hidden>
-        <textarea id="msgInput" rows="1" placeholder="Write a local draft (not sent)…"></textarea>
+        <textarea id="msgInput" rows="1" placeholder="Write a message…" maxlength="4096"></textarea>
         <button class="icon-btn" id="micBtn" title="Voice note">🎤</button>
         <button id="sendBtn" title="Send">➤</button>
       </div>
@@ -180,7 +201,11 @@
 
 <div id="toast" class="hidden"></div>
 
+<script src="js/config.js"></script>
 <script src="js/storage.js"></script>
+<script src="js/crypto.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/cloud.js"></script>
 <script src="js/mesh.js"></script>
 <script src="js/app.js"></script>
 </body>

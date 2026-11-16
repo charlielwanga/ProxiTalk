@@ -2,11 +2,12 @@
   "name": "proxitalk",
   "version": "0.1.0",
   "private": true,
-  "description": "ProxiTalk local-only early-access web preview",
+  "description": "ProxiTalk early-access encrypted one-to-one online messaging web app",
   "type": "module",
   "scripts": {
     "dev": "python3 -m http.server 8000 --bind 0.0.0.0",
     "build": "node scripts/build-site.mjs",
+    "build:android": "npm run build && node scripts/copy-android-assets.mjs",
     "preview": "python3 -m http.server 8000 --bind 0.0.0.0 --directory dist",
     "test": "node --test"
   }

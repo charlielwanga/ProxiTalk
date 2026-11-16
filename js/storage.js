@@ -4,15 +4,18 @@
    ═══════════════════════════════════════════════════════════════ */
 const Store = (() => {
   const PREFIX = 'proxitalk_';
+  let namespace = '';
+  const keyFor = key => PREFIX + (namespace ? namespace + '_' : '') + key;
+  function setNamespace(userId) { namespace = String(userId || 'local').replace(/[^a-zA-Z0-9_-]/g, '_'); }
   function save(key, value) {
-    try { localStorage.setItem(PREFIX + key, JSON.stringify(value)); } catch (e) { console.warn('Store save failed', e); }
+    try { localStorage.setItem(keyFor(key), JSON.stringify(value)); } catch (e) { console.warn('Store save failed', e); }
   }
   function load(key, fallback) {
     try {
-      const v = localStorage.getItem(PREFIX + key);
+      const v = localStorage.getItem(keyFor(key));
       return v ? JSON.parse(v) : fallback;
     } catch (e) { return fallback; }
   }
-  function remove(key) { try { localStorage.removeItem(PREFIX + key); } catch (e) {} }
-  return { save, load, remove };
+  function remove(key) { try { localStorage.removeItem(keyFor(key)); } catch (e) {} }
+  return { save, load, remove, setNamespace };
 })();

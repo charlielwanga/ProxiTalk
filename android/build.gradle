@@ -1,14 +1,14 @@
 // ProxiTalk Android build config
 buildscript {
     repositories { google(); mavenCentral() }
-    dependencies { classpath 'com.android.tools.build:gradle:8.2.0' }
+    dependencies { classpath 'com.android.tools.build:gradle:8.6.1' }
 }
 allprojects { repositories { google(); mavenCentral() } }
 
 ext {
-    compileSdk = 34
+    compileSdk = 35
     minSdk = 24
-    targetSdk = 34
+    targetSdk = 35
     versionCode = 1
     versionName = '1.0.0'
 }
