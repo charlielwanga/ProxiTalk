@@ -1,0 +1,14 @@
+{
+  "name": "ProxiTalk — Local Preview",
+  "short_name": "ProxiTalk",
+  "description": "Early-access local-first messaging interface. Messages are not transmitted.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0B141A",
+  "theme_color": "#0B3D3A",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "./assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

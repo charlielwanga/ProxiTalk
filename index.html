@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ProxiTalk — Offline Mesh Messenger</title>
+<meta name="description" content="ProxiTalk early-access local-first messaging prototype. Messages stay in this browser and are not transmitted.">
+<meta name="theme-color" content="#0B3D3A">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%2300C2A8'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'>P</text></svg>">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ══════════ TOP BAR ══════════ -->
+<header id="topbar">
+  <div class="brand">
+    <div class="brand-icon">◉</div>
+    <div class="brand-text">
+      <strong>ProxiTalk</strong>
+      <span id="brand-sub">Local-only preview · Not connected</span>
+    </div>
+  </div>
+
+  <div class="topbar-center">
+    <div class="mesh-pill" id="meshPill" title="Current transport status">
+      <span id="meshPillText">Local preview · not connected</span>
+    </div>
+    <div class="mesh-pill" id="queuePill" title="Local drafts, not transmitted">
+      📦 <span id="queueCount">0 transport packets</span>
+    </div>
+  </div>
+
+  <div class="topbar-actions">
+    <button class="icon-btn" id="meshPanelBtn" title="Mesh network map">🗺️</button>
+    <button class="icon-btn" id="settingsBtn" title="Settings">⚙️</button>
+    <div class="my-avatar" id="myAvatar" title="Your ProxiTalk ID">YO</div>
+  </div>
+</header>
+
+<div class="preview-notice" role="status">Early-access preview: local-only. Messages are not transmitted or protected for real-world use.</div>
+
+<!-- ══════════ MAIN LAYOUT ══════════ -->
+<div id="layout">
+
+  <!-- ─── SIDEBAR ─── -->
+  <aside id="sidebar">
+    <div class="sidebar-head">
+      <div class="search-box">
+        <span>🔍</span>
+        <input id="searchInput" placeholder="Search chats, people, IDs…">
+      </div>
+      <div class="sidebar-actions">
+        <button class="mini-btn" id="newChatBtn">＋ New Chat</button>
+        <button class="mini-btn" id="newGroupBtn">👥 Group</button>
+        <button class="mini-btn sos" id="sosBtn" disabled title="Emergency broadcasting is not implemented">🆘 SOS unavailable</button>
+      </div>
+    </div>
+
+    <div class="filter-tabs" id="filterTabs">
+      <button class="tab active" data-filter="all">All</button>
+      <button class="tab" data-filter="unread">Unread <span class="badge" id="unreadBadge">0</span></button>
+      <button class="tab" data-filter="groups">Groups</button>
+    </div>
+
+    <div id="chatList"></div>
+
+    <div class="sidebar-foot">
+    <div class="foot-stat"><span id="footNodes">1</span><label>device</label></div>
+    <div class="foot-stat"><span id="footDelivered">0</span><label>delivered</label></div>
+    <div class="foot-stat"><span id="footHops">0</span><label>avg hops</label></div>
+    <div class="foot-stat"><span id="footSaved">0</span><label>drafts</label></div>
+    </div>
+  </aside>
+
+  <!-- ─── CHAT AREA ─── -->
+  <main id="chatArea">
+    <div id="chatEmpty">
+      <div class="empty-hero">
+        <div class="empty-icon">📡</div>
+        <h2>ProxiTalk</h2>
+        <p>A local-first messaging prototype. No live account or transport is connected yet.</p>
+        <div class="empty-features">
+          <div>🗂️ Contacts and drafts stay in this browser</div>
+          <div>📡 Bluetooth mesh is not active in this web preview</div>
+          <div>☁️ Cloud sync is disabled until secure sign-in is configured</div>
+          <div>⚠️ Not for emergencies or sensitive messages</div>
+        </div>
+        <p class="empty-hint">Add a contact to explore the local interface. Messages will not be delivered.</p>
+      </div>
+    </div>
+
+    <div id="chatView" class="hidden">
+      <div id="chatHeader">
+        <button id="backBtn" class="icon-btn">←</button>
+        <div class="chat-avatar" id="chatAvatar">A</div>
+        <div class="chat-meta">
+          <strong id="chatName">—</strong>
+          <span id="chatStatus">—</span>
+        </div>
+        <div class="chat-head-actions">
+          <span class="e2e-badge" title="Messaging encryption is not active">🔓 Local only</span>
+          <span class="hop-badge" id="hopBadge" title="Transport status">not sent</span>
+          <button class="icon-btn" id="callBtn" title="Voice calls are not implemented" aria-label="Voice calls unavailable">📞</button>
+          <button class="icon-btn" id="infoBtn" title="Chat info & hop path">ℹ️</button>
+        </div>
+      </div>
+
+      <div id="messages"></div>
+
+      <div id="typingBar" class="hidden"><span class="typing-dots"><i></i><i></i><i></i></span> <span id="typingText">typing…</span></div>
+
+      <div id="composer">
+        <button class="icon-btn" id="emojiBtn" title="Emoji">😊</button>
+        <button class="icon-btn" id="attachBtn" title="Attach photo / file">📎</button>
+        <input type="file" id="fileInput" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.zip" hidden>
+        <textarea id="msgInput" rows="1" placeholder="Write a local draft (not sent)…"></textarea>
+        <button class="icon-btn" id="micBtn" title="Voice note">🎤</button>
+        <button id="sendBtn" title="Send">➤</button>
+      </div>
+      <div id="emojiPicker" class="hidden"></div>
+    </div>
+  </main>
+
+  <!-- ─── MESH PANEL ─── -->
+  <aside id="meshPanel" class="hidden">
+    <div class="panel-head">
+      <strong>🗺️ Mesh Network</strong>
+      <button class="icon-btn" id="meshClose">✕</button>
+    </div>
+
+    <canvas id="meshCanvas" width="340" height="260"></canvas>
+    <div class="canvas-legend">
+      <span><i class="dot you"></i> This device</span>
+      <span>No peer transport connected</span>
+    </div>
+
+    <div class="panel-section">
+      <h4>📊 Network Stats</h4>
+      <div class="stat-grid">
+        <div class="stat"><b id="stNodes">1</b><label>Local device</label></div>
+        <div class="stat"><b id="stRange">—</b><label>Radio range</label></div>
+        <div class="stat"><b id="stDelivered">0</b><label>Delivered</label></div>
+        <div class="stat"><b id="stHops">0</b><label>Avg hops</label></div>
+        <div class="stat"><b id="stQueued">0</b><label>Queued</label></div>
+        <div class="stat"><b id="stSynced">0</b><label>Cloud synced</label></div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <h4>📦 Unsent local drafts</h4>
+      <div id="queueList"><p class="muted">Queue empty — all messages delivered.</p></div>
+    </div>
+
+    <div class="panel-section">
+      <h4>☁️ Cloud sync status</h4>
+      <div id="syncLog"><p class="muted">Cloud sync is disabled until secure sign-in and authorization are in place.</p></div>
+    </div>
+
+    <div class="panel-section">
+      <h4>👥 Nearby Nodes</h4>
+      <div id="nodeList"></div>
+    </div>
+
+    <div class="panel-section">
+      <h4>Transport status</h4>
+      <p class="muted">Live Bluetooth/Wi-Fi Direct transport is not implemented in this web build. Nothing shown here represents nearby phones.</p>
+    </div>
+  </aside>
+</div>
+
+<!-- ══════════ MODALS ══════════ -->
+<div id="modalOverlay" class="hidden">
+  <div id="modalBox">
+    <div class="modal-head"><strong id="modalTitle">New Chat</strong><button class="icon-btn" id="modalClose">✕</button></div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script src="js/storage.js"></script>
+<script src="js/mesh.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
