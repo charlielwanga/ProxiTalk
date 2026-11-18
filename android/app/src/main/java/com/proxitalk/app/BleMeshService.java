@@ -353,7 +353,7 @@ public final class BleMeshService extends Service {
             java.util.Iterator<String> packetKeys = packet.keys();
             while (packetKeys.hasNext()) {
                 String key = packetKeys.next();
-                if (!Arrays.asList("v", "id", "sender_id", "recipient_id", "created_at", "expires_at", "hops", "ciphertext").contains(key)) return null;
+                if (!Arrays.asList("v", "id", "sender_id", "recipient_id", "created_at", "expires_at", "hops", "ciphertext", "sender_signing_key", "signature").contains(key)) return null;
             }
             if (packet.optInt("v", 0) != 1 || packetId.length() > 80 || packetId.isEmpty()
                     || createdAt <= 0 || createdAt > System.currentTimeMillis() + 60_000L
@@ -365,7 +365,17 @@ public final class BleMeshService extends Service {
             UUID.fromString(packetId);
             JSONObject ciphertext = packet.optJSONObject("ciphertext");
             JSONObject ephemeral = ciphertext == null ? null : ciphertext.optJSONObject("epk");
-            if (ciphertext == null || ephemeral == null) return null;
+            JSONObject senderSigningKey = packet.optJSONObject("sender_signing_key");
+            String signature = packet.optString("signature");
+            if (ciphertext == null || ephemeral == null || senderSigningKey == null || signature.length() < 40 || signature.length() > 256
+                    || !signature.matches("[A-Za-z0-9+/=_-]+")) return null;
+            java.util.Iterator<String> signingKeyKeys = senderSigningKey.keys();
+            while (signingKeyKeys.hasNext()) {
+                String key = signingKeyKeys.next();
+                if (!Arrays.asList("kty", "crv", "x", "y", "ext", "key_ops").contains(key)) return null;
+            }
+            if (!"EC".equals(senderSigningKey.optString("kty")) || !"P-256".equals(senderSigningKey.optString("crv"))
+                    || senderSigningKey.optString("x").isEmpty() || senderSigningKey.optString("y").isEmpty()) return null;
             java.util.Iterator<String> cipherKeys = ciphertext.keys();
             while (cipherKeys.hasNext()) {
                 String key = cipherKeys.next();

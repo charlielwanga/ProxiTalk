@@ -29,12 +29,12 @@ const ProxiCloud = (() => {
 
   async function findDirectoryById(proxiId) {
     const id = encodeURIComponent('eq.' + String(proxiId).toUpperCase());
-    const rows = await api(`proxitalk_directory?proxitalk_id=${id}&select=user_id,proxitalk_id,display_name,public_key&limit=1`);
+    const rows = await api(`proxitalk_directory?proxitalk_id=${id}&select=user_id,proxitalk_id,display_name,public_key,signing_public_key&limit=1`);
     return rows?.[0] || null;
   }
   async function findDirectoryByUserId(userId) {
     const id = encodeURIComponent('eq.' + userId);
-    const rows = await api(`proxitalk_directory?user_id=${id}&select=user_id,proxitalk_id,display_name,public_key&limit=1`);
+    const rows = await api(`proxitalk_directory?user_id=${id}&select=user_id,proxitalk_id,display_name,public_key,signing_public_key&limit=1`);
     return rows?.[0] || null;
   }
   async function createDirectoryProfile(profile) {
@@ -46,7 +46,18 @@ const ProxiCloud = (() => {
         proxitalk_id: profile.proxiId,
         display_name: profile.displayName,
         public_key: profile.publicKey,
+        signing_public_key: profile.signingPublicKey,
       }),
+    });
+    return rows?.[0] || null;
+  }
+
+  async function updateDirectorySigningKey(userId, signingPublicKey) {
+    const id = encodeURIComponent('eq.' + userId);
+    const rows = await api(`proxitalk_directory?user_id=${id}`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ signing_public_key: signingPublicKey }),
     });
     return rows?.[0] || null;
   }
@@ -93,5 +104,5 @@ const ProxiCloud = (() => {
     return received;
   }
 
-  return { findDirectoryById, findDirectoryByUserId, createDirectoryProfile, sendEncryptedMessage, receivePending };
+  return { findDirectoryById, findDirectoryByUserId, createDirectoryProfile, updateDirectorySigningKey, sendEncryptedMessage, receivePending };
 })();

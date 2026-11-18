@@ -4,13 +4,13 @@
 
 The static web app is built into `dist/` by `scripts/build-site.mjs` and hosted on GitHub Pages. Authenticated users have one directory identity and can send one-to-one text as a recipient-key-encrypted envelope through the Supabase mailbox. The server stores ciphertext only; participant-scoped RLS governs mailbox access. The app confirms a send only when Supabase returns the inserted message-row ID. Recipients poll for pending rows, decrypt locally, then acknowledge them.
 
-Browser sessions persist in the current browser profile. Device ECDH private keys are non-extractable CryptoKeys in IndexedDB; signed-in chat history is encrypted with a device-derived key. These keys are not currently recoverable or portable to another browser/device. Clearing site/app data can permanently remove the key.
+Browser sessions persist in the current browser profile. Device ECDH and ECDSA private keys are non-extractable CryptoKeys in IndexedDB; signed-in chat history is encrypted with a device-derived key. Directory-published ECDSA public keys authenticate experimental Android BLE packets. BLE messages are accepted only for the signed-in recipient, only after sender identity/signature verification against the directory key, and only after recipient decryption. These keys are not currently recoverable or portable to another browser/device. Clearing site/app data can permanently remove the keys.
 
 ## Android host and BLE discovery
 
 The Android module serves bundled assets through `WebViewAssetLoader` and limits the native JavaScript bridge to the app origin. Email PKCE redirects use a narrowly scoped custom URI. The opt-in foreground BLE service advertises/scans a ProxiTalk UUID and opens a GATT characteristic for bounded packet transfer. It reports only an anonymous peer count; device addresses/names stay native.
 
-The GATT prototype accepts short-lived, recipient-key-encrypted JSON envelopes and fragments/reassembles them under a byte cap. It rejects plaintext text/body fields. It does **not** authenticate sender identity, route chat messages, acknowledge recipient decryption, durably store packets, relay them, or fall back to cloud. Do not present this carrier as offline messaging. Android 13 is the first native target; iOS is not scoped for this milestone.
+The GATT carrier accepts bounded JSON envelopes containing recipient-key-encrypted content, an ECDSA public signing key, and signature; it fragments/reassembles under a byte cap. Java validates structure/expiry/size, while the authenticated WebView verifies sender key against the directory and decrypts content before chat insertion. If cloud delivery fails while BLE is running, the app can hand off a signed one-hop text packet; the sender sees only a local handoff state, never a delivery receipt. There is no durable packet storage, relay, or automatic retry. This is experimental and must not be presented as reliable offline delivery. Android 13 is the first native target; iOS is not scoped for this milestone.
 
 ## Security and operational boundary
 
@@ -22,8 +22,8 @@ The GATT prototype accepts short-lived, recipient-key-encrypted JSON envelopes a
 
 ## Remaining implementation sequence
 
-1. Validate opt-in BLE/GATT transfer on two Android 13 devices, including permission denial, Bluetooth disabled, interrupted/reordered frames, and oversize rejection.
-2. Design offline sender authentication. Recipient-only encryption provides confidentiality but not sender authenticity.
-3. Integrate verified packet send/receive into chat and add recipient-decryption acknowledgements.
-4. Add deduplication, encrypted durable store-and-forward, hop/expiry limits, cloud fallback, and cleanup.
+1. Validate signed opt-in BLE/GATT chat on two Android 13 devices, including permission denial, Bluetooth disabled, online fallback, sender-key mismatch, tampering, interrupted/reordered frames, expiry, and oversize rejection.
+2. Design and implement recipient-decryption acknowledgements with replay-resistant semantics; until then, keep BLE handoff distinct from delivery.
+3. Add encrypted bounded durable store-and-forward and multi-hop relay only with explicit hop, TTL, quota, replay, and abuse controls.
+4. Define key rotation, recovery, and multi-device identity policy before widening BLE availability.
 5. Complete the two-real-account acceptance matrix, independent security review, and production operations before launch.

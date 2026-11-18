@@ -13,12 +13,31 @@
     catch (error) { console.warn('[ProxiTalk] profile lookup failed', error); }
   }
   let keyAvailable = !authUser || !currentProfile;
+  let signingKeyAvailable = false;
+  let signingKeyConflict = false;
   let initialChats = Store.load('chats', {});
   if (authUser && currentProfile) {
     try {
       const publicKey = await ProxiCrypto.ensureIdentity(authUser.id);
       keyAvailable = publicKey.x === currentProfile.public_key.x && publicKey.y === currentProfile.public_key.y;
-      if (keyAvailable) initialChats = await ProxiCrypto.decryptLocalData(initialChats);
+      if (keyAvailable) {
+        const localSigningKey = ProxiCrypto.getSigningPublicKey();
+        const remoteSigningKey = currentProfile.signing_public_key;
+        if (!remoteSigningKey) {
+          try {
+            const updated = await ProxiCloud.updateDirectorySigningKey(authUser.id, localSigningKey);
+            signingKeyAvailable = !!updated;
+            if (updated) currentProfile = { ...currentProfile, signing_public_key: updated.signing_public_key || localSigningKey };
+          } catch (error) { console.warn('[ProxiTalk] could not publish device signing key', error); }
+        } else if (remoteSigningKey.kty === localSigningKey.kty && remoteSigningKey.crv === localSigningKey.crv
+          && remoteSigningKey.x === localSigningKey.x && remoteSigningKey.y === localSigningKey.y) {
+          signingKeyAvailable = true;
+        } else {
+          signingKeyConflict = true;
+          console.error('[ProxiTalk] local signing key differs from the directory key; offline identity is disabled');
+        }
+        initialChats = await ProxiCrypto.decryptLocalData(initialChats);
+      }
     } catch (error) { keyAvailable = false; console.warn('[ProxiTalk] device history key unavailable', error); }
   }
 
@@ -169,10 +188,11 @@
       const displayName = $('profileName').value.trim().replace(/\s+/g, ' ');
       if (!displayName || displayName.length > 48) throw new Error('Enter a display name of 1 to 48 characters.');
       const publicKey = await ProxiCrypto.ensureIdentity(authUser.id);
+      const signingPublicKey = ProxiCrypto.getSigningPublicKey();
       let record = null;
       for (let attempt = 0; attempt < 3 && !record; attempt++) {
         const id = 'PT-' + crypto.getRandomValues(new Uint32Array(1))[0].toString(16).padStart(8, '0').toUpperCase();
-        try { record = await ProxiCloud.createDirectoryProfile({ userId: authUser.id, proxiId: id, displayName, publicKey }); }
+        try { record = await ProxiCloud.createDirectoryProfile({ userId: authUser.id, proxiId: id, displayName, publicKey, signingPublicKey }); }
         catch (error) { if (attempt === 2) throw error; }
       }
       if (!record) throw new Error('Could not create your profile. Please try again.');
@@ -278,7 +298,7 @@
       const replyHtml = m.replyTo ? `<div class="reply-quote"><b>${esc(m.replyTo.sender || 'You')}</b><span>${esc(m.replyTo.text || '')}</span></div>` : '';
       const reaction = m.reaction ? `<span class="reaction">${esc(m.reaction)}</span>` : '';
       const sosCls = m.isSOS ? ' sos-bubble' : '';
-      const statusChip = m.status === 'local' ? '<span class="status-chip">Saved here · not sent</span>' : (m.status === 'failed' ? '<span class="status-chip">Delivery not confirmed · saved here</span>' : (m.status === 'sent' ? '<span class="status-chip">Encrypted · server queued</span>' : ''));
+      const statusChip = m.status === 'local' ? '<span class="status-chip">Saved here · not sent</span>' : (m.status === 'failed' ? '<span class="status-chip">Delivery not confirmed · saved here</span>' : (m.status === 'sent' ? '<span class="status-chip">Encrypted · server queued</span>' : (m.status === 'ble_queued' ? '<span class="status-chip">Signed · handed to BLE · receipt unconfirmed</span>' : (m.signerVerified ? '<span class="status-chip">BLE signature verified</span>' : ''))));
       html += `
         <div class="msg-row ${isMe ? 'me' : 'them'}">
           <div class="bubble${sosCls}" data-mid="${esc(m.id)}">
@@ -353,8 +373,28 @@
     const c = contactById(activeChat);
     const msgs = chats[activeChat] || [];
     const last = msgs[msgs.length - 1];
-    $('chatStatus').textContent = offlineMode ? 'Local drafts only · not sent' : (last?.status === 'local' ? 'Saved on this device · not sent' : (last?.status === 'failed' ? 'Delivery not confirmed · message saved locally' : (c?.proxiId ? 'Encrypted online messaging' : 'Choose a verified ProxiTalk ID')));
-    $('hopBadge').textContent = last?.status === 'sent' ? 'server queued' : 'no mesh';
+    $('chatStatus').textContent = offlineMode ? 'Local drafts only · not sent' : (last?.status === 'local' ? 'Saved on this device · not sent' : (last?.status === 'failed' ? 'Delivery not confirmed · message saved locally' : (last?.status === 'ble_queued' ? 'Signed and handed to nearby BLE · receipt unconfirmed' : (c?.proxiId ? 'Encrypted online messaging' : 'Choose a verified ProxiTalk ID'))));
+    $('hopBadge').textContent = last?.status === 'sent' ? 'server queued' : (last?.status === 'ble_queued' ? 'BLE handoff' : 'no mesh');
+  }
+
+  async function trySendSignedBleMessage(contact, text) {
+    if (ProxiBLE.detect() !== 'native-discovery' || !ProxiBLE.getStatus().running
+      || !authUser || !currentProfile || !keyAvailable || !signingKeyAvailable || signingKeyConflict
+      || !contact?.userId || !contact?.publicKey) return false;
+    const createdAt = Date.now();
+    const packet = await ProxiCrypto.signPacket({
+      v: 1,
+      id: crypto.randomUUID(),
+      sender_id: authUser.id,
+      recipient_id: contact.userId,
+      created_at: createdAt,
+      expires_at: createdAt + 7 * 24 * 60 * 60 * 1000,
+      hops: 0,
+      ciphertext: await ProxiCrypto.encryptFor(contact.publicKey, JSON.stringify({ type: 'text', text })),
+    });
+    const result = ProxiBLE.sendPacket(packet);
+    if (!result?.ok) throw new Error(result?.error || 'Nearby BLE carrier did not accept the packet');
+    return packet.id;
   }
 
   // ── Send message ───────────────────────────────────────────
@@ -397,7 +437,16 @@
       persist(); renderMessages(); renderChatList(); updateChatStatus();
       toast('Encrypted and saved to the server mailbox');
     } catch (error) {
-      console.warn('[ProxiTalk] message delivery was not confirmed', error);
+      console.warn('[ProxiTalk] online message delivery was not confirmed', error);
+      try {
+        const packetId = await trySendSignedBleMessage(c, text);
+        if (packetId) {
+          msg.status = 'ble_queued'; msg.encrypted = true; msg.blePacketId = packetId; msg.signerVerified = true;
+          persist(); renderMessages(); renderChatList(); updateChatStatus();
+          toast('Signed, encrypted message handed to nearby BLE. Recipient receipt is not confirmed.');
+          return;
+        }
+      } catch (bleError) { console.warn('[ProxiTalk] signed BLE handoff failed', bleError); }
       msg.status = 'failed'; msg.failureMessage = error.message || 'Network error';
       persist(); renderMessages(); renderChatList(); updateChatStatus();
       const code = error.code ? ' [' + error.code + ']' : (error.status ? ' [HTTP ' + error.status + ']' : '');
@@ -414,7 +463,7 @@
         if (!contact) {
           const remote = await ProxiCloud.findDirectoryByUserId(row.sender_id);
           if (!remote) continue;
-          contact = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id, publicKey: remote.public_key, name: remote.display_name, color: '#128C7E', about: 'Verified ProxiTalk contact', phone: remote.proxitalk_id };
+          contact = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id, publicKey: remote.public_key, signingPublicKey: remote.signing_public_key || null, name: remote.display_name, color: '#128C7E', about: 'Verified ProxiTalk contact', phone: remote.proxitalk_id };
           contacts.push(contact);
         }
         const list = chats[contact.id] || (chats[contact.id] = []);
@@ -426,6 +475,46 @@
       }
       if (incoming.length) { persist(); renderChatList(); if (activeChat) renderMessages(); }
     } catch (error) { console.warn('[ProxiTalk] inbox poll failed', error); }
+  }
+
+  let blePollRunning = false;
+  async function pollBlePackets() {
+    if (blePollRunning || !authUser || !currentProfile || !keyAvailable || !signingKeyAvailable || signingKeyConflict) return;
+    blePollRunning = true;
+    try {
+      for (const packet of ProxiBLE.drainPackets()) {
+        try {
+          const now = Date.now();
+          if (!packet || packet.v !== 1 || packet.recipient_id !== authUser.id
+            || !Number.isFinite(packet.created_at) || !Number.isFinite(packet.expires_at)
+            || packet.created_at > now + 60_000 || packet.expires_at <= now
+            || packet.expires_at <= packet.created_at || packet.expires_at > packet.created_at + 14 * 24 * 60 * 60 * 1000
+            || packet.hops !== 0 || typeof packet.id !== 'string') continue;
+          let contact = contacts.find(item => item.userId === packet.sender_id);
+          if (!contact) {
+            const remote = await ProxiCloud.findDirectoryByUserId(packet.sender_id);
+            if (!remote) continue;
+            contact = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id,
+              publicKey: remote.public_key, signingPublicKey: remote.signing_public_key || null,
+              name: remote.display_name, color: '#128C7E', about: 'Verified ProxiTalk contact', phone: remote.proxitalk_id };
+            contacts.push(contact);
+          } else if (!contact.signingPublicKey) {
+            const remote = await ProxiCloud.findDirectoryByUserId(packet.sender_id);
+            if (remote) contact.signingPublicKey = remote.signing_public_key || null;
+          }
+          if (!contact.signingPublicKey || !await ProxiCrypto.verifyPacket(packet, contact.signingPublicKey)) continue;
+          const decoded = JSON.parse(await ProxiCrypto.decryptFromMe(packet.ciphertext));
+          if (!decoded || decoded.type !== 'text' || typeof decoded.text !== 'string' || decoded.text.length > 5000) continue;
+          const list = chats[contact.id] || (chats[contact.id] = []);
+          if (list.some(message => message.blePacketId === packet.id || message.cloudId === packet.id)) continue;
+          list.push({ id: packet.id, blePacketId: packet.id, from: 'them', sender: contact.name,
+            text: decoded.text, type: 'text', time: packet.created_at, status: 'received',
+            encrypted: true, signerVerified: true, hops: 0 });
+          if (!activeChat || activeChat !== contact.id) contact.lastRead = 0;
+          persist(); renderChatList(); if (activeChat) renderMessages();
+        } catch (error) { console.warn('[ProxiTalk] ignored an invalid BLE packet', error); }
+      }
+    } finally { blePollRunning = false; }
   }
 
   // ── Mesh callbacks ─────────────────────────────────────────
@@ -517,8 +606,11 @@
         if (remote.user_id === authUser.id) return toast('That is your own ProxiTalk ID');
         let c = contacts.find(item => item.userId === remote.user_id);
         if (!c) {
-          c = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id, publicKey: remote.public_key, name: remote.display_name, color: '#128C7E', phone: remote.proxitalk_id, about: 'Verified ProxiTalk contact' };
+          c = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id, publicKey: remote.public_key, signingPublicKey: remote.signing_public_key || null, name: remote.display_name, color: '#128C7E', phone: remote.proxitalk_id, about: 'Verified ProxiTalk contact' };
           contacts.push(c); persist(); renderChatList();
+        } else if (!c.signingPublicKey && remote.signing_public_key) {
+          c.signingPublicKey = remote.signing_public_key;
+          persist(); renderChatList();
         }
         closeModal(); openChat(c.id);
       } catch (error) { toast(error.message || 'Could not search the directory'); }
@@ -530,14 +622,15 @@
   // ── Settings ───────────────────────────────────────────────
   $('settingsBtn').onclick = async () => {
     const fingerprint = currentProfile ? await ProxiCrypto.fingerprint(currentProfile.public_key) : 'Local drafts only';
+    const signingFingerprint = authUser ? await ProxiCrypto.fingerprint(ProxiCrypto.getSigningPublicKey()) : 'Not provisioned';
     openModal('Account & security', `
       <div class="detail-row"><span>${currentProfile ? 'Your ProxiTalk ID' : 'Local draft ID · not registered'}</span><b>${esc(currentProfile?.proxitalk_id || localProfileId)}</b></div>
-      ${currentProfile ? `<div class="detail-row"><span>Key fingerprint</span><b>${esc(fingerprint)}</b></div><button class="btn-primary" id="copyIdBtn" style="margin:8px 0">Copy my ProxiTalk ID</button>` : ''}
+      ${currentProfile ? `<div class="detail-row"><span>Encryption-key fingerprint</span><b>${esc(fingerprint)}</b></div><div class="detail-row"><span>Signing-key fingerprint</span><b>${esc(signingFingerprint)}</b></div><div class="detail-row"><span>Offline sender identity</span><b>${signingKeyConflict ? 'Key mismatch · disabled' : signingKeyAvailable ? 'Provisioned on this device' : 'Not synchronized'}</b></div><button class="btn-primary" id="copyIdBtn" style="margin:8px 0">Copy my ProxiTalk ID</button>` : ''}
       <div class="detail-row"><span>Account</span><b>${authUser ? esc(authUser.email || 'Signed in') : 'Not signed in'}</b></div>
       <div class="detail-row"><span>Message security</span><b>Recipient public-key encryption for online text</b></div>
-      <div class="detail-row"><span>Delivery</span><b>${offlineMode || !authUser ? 'Local drafts only; not sent' : 'Internet mailbox · no Bluetooth relay'}</b></div>
+      <div class="detail-row"><span>Delivery</span><b>${offlineMode || !authUser ? 'Local drafts only; not sent' : 'Internet mailbox; experimental BLE handoff if online send fails'}</b></div>
       <div class="detail-row"><span>Device storage</span><b>Private key is device-bound; no key recovery</b></div>
-      <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">Compare your key fingerprint with your contact out of band to detect directory key changes. New devices cannot decrypt old messages. Attachments, groups, calls, and emergency SOS are not supported. Do not rely on ProxiTalk for emergencies.</p>
+      <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">Compare both key fingerprints with your contact out of band to detect directory key changes. The signing key authenticates experimental one-hop Android BLE text against the online directory. This path is not physically validated and does not confirm receipt or relay messages. New devices cannot decrypt old messages. Attachments, groups, calls, and emergency SOS are not supported. Do not rely on ProxiTalk for emergencies.</p>
       ${authUser ? '<button class="btn-primary" id="signOutBtn" style="margin-top:12px">Sign out</button>' : ''}
       <button class="btn-primary" id="wipeBtn" style="margin-top:12px;background:#3D1A20;color:#FF8A96">Clear local chat data</button>`);
     if (currentProfile) $('copyIdBtn').onclick = async () => {
@@ -556,13 +649,15 @@
     const last = msgs[msgs.length - 1];
     const path = ['This device'];
     const fingerprint = c.publicKey ? await ProxiCrypto.fingerprint(c.publicKey) : 'Not verified';
+    const signingFingerprint = c.signingPublicKey ? await ProxiCrypto.fingerprint(c.signingPublicKey) : 'Not provisioned';
     openModal('Chat Info', `
       <div class="detail-row"><span>Name</span><b>${esc(c.name)}</b></div>
       <div class="detail-row"><span>About</span><b>${esc(c.about || '—')}</b></div>
       <div class="detail-row"><span>Phone / ID</span><b>${esc(c.phone || c.id)}</b></div>
-      <div class="detail-row"><span>Public-key fingerprint</span><b>${esc(fingerprint)}</b></div>
+      <div class="detail-row"><span>Encryption-key fingerprint</span><b>${esc(fingerprint)}</b></div>
+      <div class="detail-row"><span>Signing-key fingerprint</span><b>${esc(signingFingerprint)}</b></div>
       <div class="detail-row"><span>Message privacy</span><b>Recipient-key encrypted online text</b></div>
-      <div class="detail-row"><span>Delivery</span><b>${last?.status === 'local' ? 'Local draft · not sent' : last?.status === 'sent' ? 'Accepted by encrypted mailbox' : 'No message sent'}</b></div>
+      <div class="detail-row"><span>Delivery</span><b>${last?.status === 'local' ? 'Local draft · not sent' : last?.status === 'sent' ? 'Accepted by encrypted mailbox' : last?.status === 'ble_queued' ? 'Signed BLE handoff · receipt unconfirmed' : last?.signerVerified ? 'BLE sender signature verified' : 'No message sent'}</b></div>
       <h4 style="margin-top:14px;font-size:12px;color:var(--muted)">LAST MESSAGE PATH</h4>
       <div class="hop-path">${path.map((p, i) => `${i ? '<span class="hop-arrow">→</span>' : ''}<span class="hop-node">${esc(p)}</span>`).join('')}</div>
       <p style="font-size:12px;color:var(--muted)">No Bluetooth hop path exists in this local-only preview.</p>`);
@@ -634,7 +729,7 @@
     stop.classList.toggle('hidden', !status.running);
     if (!native) label.textContent = 'Native BLE discovery is available only in the Android app.';
     else if (status.error) label.textContent = status.error;
-    else if (status.running) label.textContent = `BLE on · ${status.peerCount || 0} nearby · ${status.connectedPeerCount || 0} connected. Packet-carrier prototype; app messages are not confirmed over BLE.`;
+    else if (status.running) label.textContent = `BLE on · ${status.peerCount || 0} nearby · ${status.connectedPeerCount || 0} connected. Signed one-hop text is experimental; receipt is unconfirmed.`;
     else label.textContent = 'BLE is off. Turn it on only while you want nearby devices detected.';
   }
   $('bleStartBtn').onclick = async () => {
@@ -666,12 +761,23 @@
     $('chatArea').classList.remove('show-mobile');
   };
 
-  // No background scanning, cloud heartbeat, or network claims are made in this preview.
+  async function syncMissingContactSigningKeys() {
+    if (!authUser || !currentProfile || !ProxiAuth.isSignedIn()) return;
+    let changed = false;
+    for (const contact of contacts) {
+      if (!contact.userId || contact.signingPublicKey) continue;
+      try {
+        const remote = await ProxiCloud.findDirectoryByUserId(contact.userId);
+        if (remote?.signing_public_key) { contact.signingPublicKey = remote.signing_public_key; changed = true; }
+      } catch (error) { console.warn('[ProxiTalk] contact signing-key refresh failed', error); }
+    }
+    if (changed) persist();
+  }
 
   // ── Init ───────────────────────────────────────────────────
   MeshEngine.init($('meshCanvas'), { onDeliver: onMeshDeliver, onStats: onMeshStats });
   refreshBleUI();
-  if (ProxiBLE.detect() === 'native-discovery') setInterval(refreshBleUI, 2000);
+  if (ProxiBLE.detect() === 'native-discovery') setInterval(() => { refreshBleUI(); pollBlePackets(); }, 1500);
   $('myAvatar').textContent = currentProfile ? initials(currentProfile.display_name) : 'PT';
   $('myAvatar').title = currentProfile?.proxitalk_id || 'Account settings';
   $('meshPillText').textContent = offlineMode ? 'Local drafts only' : (currentProfile ? 'Online mailbox ready' : 'Sign in to message');
@@ -680,6 +786,7 @@
   $('myAvatar').onclick = () => $('settingsBtn').click();
   renderChatList();
   if (authUser && currentProfile) {
+    syncMissingContactSigningKeys();
     pollInbox();
     setInterval(pollInbox, 5000);
     window.addEventListener('online', pollInbox);

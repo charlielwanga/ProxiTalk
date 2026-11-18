@@ -60,7 +60,7 @@
   </div>
 </header>
 
-    <div class="preview-notice" role="status">Early access: one-to-one online text is recipient-key encrypted. Attachments, groups, calls, and offline mesh are not available.</div>
+    <div class="preview-notice" role="status">Early access: one-to-one online text is recipient-key encrypted. Android also has an experimental signed one-hop BLE text path that needs physical-device validation. Attachments, groups, calls, and multi-hop offline mesh are not available.</div>
 
 <!-- ══════════ MAIN LAYOUT ══════════ -->
 <div id="layout">
@@ -101,12 +101,12 @@
       <div class="empty-hero">
         <div class="empty-icon">📡</div>
         <h2>ProxiTalk</h2>
-        <p>Secure one-to-one online messaging is being built first. Offline Bluetooth relaying is still in development.</p>
+        <p>Secure one-to-one online messaging is available. Android has an experimental signed one-hop Bluetooth text path; multi-hop relaying remains in development.</p>
         <div class="empty-features">
           <div>🔐 Recipient-key encrypted online messages</div>
           <div>🪪 Sign in and share your ProxiTalk ID with a contact</div>
           <div>📦 Outgoing drafts stay local if the network is unavailable</div>
-          <div>📡 Bluetooth mesh and multi-hop delivery are not ready yet</div>
+          <div>📡 Android one-hop BLE is experimental; multi-hop delivery is not ready</div>
         </div>
         <p class="empty-hint">Sign in, then start a chat with a verified ProxiTalk ID.</p>
       </div>
@@ -162,7 +162,7 @@
       <p id="bleStatus" class="muted" role="status" aria-live="polite">Native BLE is available only in the Android app.</p>
       <button class="btn-primary" id="bleStartBtn" type="button">Enable nearby BLE</button>
       <button class="btn-primary hidden" id="bleStopBtn" type="button">Stop nearby BLE</button>
-      <p class="muted">The Android prototype can carry bounded recipient-key-encrypted packets one hop. User messages are not routed over BLE yet: sender authentication, delivery receipts, and relay/store-and-forward are still missing. Discovery stays on only while you enable it.</p>
+      <p class="muted">Android supports experimental one-hop, recipient-encrypted BLE text packets with ECDSA sender verification against the online directory. When online mailbox delivery fails, an enabled nearby carrier may accept a signed packet; this is only a handoff, not proof of receipt. Discovery stays on only while you enable it. Relay/store-and-forward and delivery receipts are not implemented, and physical-device testing is still required.</p>
     </div>
 
     <div class="panel-section">
@@ -194,7 +194,7 @@
 
     <div class="panel-section">
       <h4>Transport status</h4>
-      <p class="muted">The Web build has no Bluetooth transport. The Android app has an opt-in GATT packet carrier prototype; it is not an authenticated chat or offline delivery path.</p>
+      <p class="muted">The Web build has no Bluetooth transport. Android has an opt-in experimental authenticated one-hop text path; it requires directory-published signing keys. It does not relay or confirm delivery, and has not yet been validated between physical devices.</p>
     </div>
   </aside>
 </div>

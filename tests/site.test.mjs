@@ -91,7 +91,28 @@ test('recipient-only encryption and device-local history encryption round-trip',
   const localEnvelope = await alice.encryptLocalData({ text: secretText });
   assert.equal(JSON.stringify(localEnvelope).includes(secretText), false);
   assert.equal(JSON.stringify(await alice.decryptLocalData(localEnvelope)), JSON.stringify({ text: secretText }));
-  assert.ok(alicePublic.x && bobPublic.x);
+  const signingPublic = alice.getSigningPublicKey();
+  const signedPayload = { id: 'packet-test', recipient: 'bob-test', ciphertext: 'opaque' };
+  const signature = await alice.signPayload(signedPayload);
+  assert.equal(await alice.verifyPayload(signingPublic, signedPayload, signature), true);
+  assert.equal(await alice.verifyPayload(signingPublic, { ...signedPayload, recipient: 'mallory' }, signature), false);
+  const blePacket = await alice.signPacket({ v: 1, id: 'packet-id', sender_id: 'alice-test', recipient_id: 'bob-test', ciphertext: { ct: 'opaque' } });
+  assert.equal(await alice.verifyPacket(blePacket, signingPublic), true);
+  assert.equal(await alice.verifyPacket({ ...blePacket, recipient_id: 'mallory' }, signingPublic), false);
+  assert.equal(await bob.verifyPacket(blePacket, bobPublic), false);
+  assert.ok(alicePublic.x && bobPublic.x && signingPublic.x);
+});
+
+test('directory signing-key migration is additive and owner-scoped', async () => {
+  const migration = await read('supabase/migrations/20261118223946_add_directory_signing_keys.sql');
+  const cloud = await read('js/cloud.js');
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS signing_public_key jsonb/);
+  assert.match(migration, /signing_public_key IS NULL OR/);
+  assert.match(migration, /NOT \(signing_public_key \? 'd'\)/);
+  assert.match(migration, /GRANT UPDATE \(signing_public_key\) ON public\.proxitalk_directory TO authenticated/);
+  assert.match(cloud, /public_key,signing_public_key/);
+  assert.match(cloud, /updateDirectorySigningKey/);
+  assert.match(cloud, /signing_public_key: profile\.signingPublicKey/);
 });
 
 test('mailbox send accepts UI camelCase and database snake_case contact keys', async () => {
@@ -204,7 +225,9 @@ test('Android BLE GATT carrier only accepts bounded recipient-key-encrypted pack
   assert.match(service, /MAX_PACKET_BYTES = 16 \* 1024/);
   assert.match(service, /FRAME_HEADER_BYTES = 8/);
   assert.match(service, /ECDH-P256\/HKDF-SHA256\/AES-256-GCM/);
-  assert.match(service, /Arrays\.asList\("v", "id", "sender_id", "recipient_id", "created_at", "expires_at", "hops", "ciphertext"\)/);
+  assert.match(service, /Arrays\.asList\("v", "id", "sender_id", "recipient_id", "created_at", "expires_at", "hops", "ciphertext", "sender_signing_key", "signature"\)/);
+  assert.match(service, /senderSigningKey/);
+  assert.match(ble, /sendPacket/);
   assert.match(service, /Arrays\.asList\("kty", "crv", "x", "y", "ext", "key_ops"\)/);
   assert.doesNotMatch(service, /ephemeral\.optString\("d"\)/);
   assert.match(activity, /requestOrStartMesh\(\)/);
@@ -212,7 +235,13 @@ test('Android BLE GATT carrier only accepts bounded recipient-key-encrypted pack
   assert.match(activity, /drainBlePackets\(\)/);
   assert.match(ble, /sendBlePacket/);
   assert.match(ble, /drainBlePackets/);
-  assert.match(html, /sender authentication, delivery receipts, and relay\/store-and-forward are still missing/);
+  assert.match(html, /ECDSA sender verification against the online directory/);
+  assert.match(html, /not proof of receipt/);
+  const app = await read('js/app.js');
+  assert.match(app, /ProxiCrypto\.signPacket/);
+  assert.match(app, /ProxiCrypto\.verifyPacket/);
+  assert.match(app, /ProxiCrypto\.decryptFromMe\(packet\.ciphertext\)/);
+  assert.match(app, /ble_queued/);
   assert.doesNotMatch(service, /Store-and-forward is implemented/);
 });
 
@@ -244,7 +273,8 @@ test('Android 13 app shell uses a secure asset origin and a narrow PKCE deep lin
 test('non-messaging features are accurately disclosed as unavailable', async () => {
   const html = await read('index.html');
   const app = await read('js/app.js');
-  assert.match(html, /Attachments, groups, calls, and offline mesh are not available/);
+  assert.match(html, /Attachments, groups, calls, and multi-hop offline mesh are not available/);
+  assert.match(html, /experimental signed one-hop BLE text path/);
   assert.match(html, /SOS unavailable/);
   assert.match(app, /Encrypted group messaging is not available yet/);
   assert.match(app, /Voice calls are not available/);
@@ -255,7 +285,7 @@ test('static build includes the complete application shell and service worker ne
     await assert.doesNotReject(access(resolve(root, file)), file);
   }
   const sw = await read('dist/sw.js');
-  assert.match(sw, /const CACHE = 'proxitalk-shell-v9'/);
+  assert.match(sw, /const CACHE = 'proxitalk-shell-v10'/);
   const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
   assert.ok(assetList, 'service worker should declare its precache list');
   const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);

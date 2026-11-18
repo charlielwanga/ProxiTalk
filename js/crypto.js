@@ -9,6 +9,8 @@ const ProxiCrypto = (() => {
   let currentUserId = null;
   let currentPrivateKey = null;
   let currentPublicJwk = null;
+  let currentSigningPrivateKey = null;
+  let currentSigningPublicJwk = null;
 
   function toB64(bytes) {
     let binary = '';
@@ -52,21 +54,82 @@ const ProxiCrypto = (() => {
     return { privateKey: pair.privateKey, publicKey: pair.publicKey, publicJwk };
   }
 
+  async function generateSigningIdentity() {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+    const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey);
+    return { privateKey: pair.privateKey, publicKey: pair.publicKey, publicJwk };
+  }
+
   async function ensureIdentity(userId) {
     if (!userId) throw new Error('Authenticated user ID is required for key storage');
-    if (currentUserId === userId && currentPrivateKey && currentPublicJwk) return currentPublicJwk;
+    if (currentUserId === userId && currentPrivateKey && currentPublicJwk && currentSigningPrivateKey && currentSigningPublicJwk) return currentPublicJwk;
     const saved = await readIdentity(userId);
+    let record;
     if (saved) {
       currentPrivateKey = saved.privateKey;
       currentPublicJwk = saved.publicJwk;
+      record = { ...saved };
     } else {
       const identity = await generateIdentity();
       currentPrivateKey = identity.privateKey;
       currentPublicJwk = identity.publicJwk;
-      await saveIdentity({ userId, privateKey: identity.privateKey, publicJwk: identity.publicJwk, createdAt: Date.now() });
+      record = { userId, privateKey: identity.privateKey, publicJwk: identity.publicJwk, createdAt: Date.now() };
+    }
+    if (record.signingPrivateKey && record.signingPublicJwk) {
+      currentSigningPrivateKey = record.signingPrivateKey;
+      currentSigningPublicJwk = record.signingPublicJwk;
+    } else {
+      // Upgrade existing device identity without replacing the non-exportable ECDH key.
+      const signing = await generateSigningIdentity();
+      currentSigningPrivateKey = signing.privateKey;
+      currentSigningPublicJwk = signing.publicJwk;
+      record.signingPrivateKey = signing.privateKey;
+      record.signingPublicJwk = signing.publicJwk;
+      await saveIdentity(record);
     }
     currentUserId = userId;
     return currentPublicJwk;
+  }
+
+  function canonicalJson(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']';
+    return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + canonicalJson(value[key])).join(',') + '}';
+  }
+  async function signPayload(payload) {
+    if (!currentSigningPrivateKey) throw new Error('Device signing key is not unlocked');
+    const signature = await crypto.subtle.sign(
+      { name: 'ECDSA', hash: 'SHA-256' }, currentSigningPrivateKey,
+      encoder.encode(canonicalJson(payload)),
+    );
+    return toB64(new Uint8Array(signature));
+  }
+  async function verifyPayload(publicJwk, payload, signature) {
+    if (!publicJwk || publicJwk.kty !== 'EC' || publicJwk.crv !== 'P-256' || !signature) return false;
+    try {
+      const key = await crypto.subtle.importKey('jwk', publicJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+      return crypto.subtle.verify(
+        { name: 'ECDSA', hash: 'SHA-256' }, key, fromB64(signature),
+        encoder.encode(canonicalJson(payload)),
+      );
+    } catch (_) { return false; }
+  }
+  function getSigningPublicKey() { return currentSigningPublicJwk; }
+  async function signPacket(packet) {
+    if (!packet || typeof packet !== 'object' || Array.isArray(packet) || packet.signature || packet.sender_signing_key) {
+      throw new Error('Packet must be an unsigned object without an embedded signing key');
+    }
+    const payload = { ...packet, sender_signing_key: currentSigningPublicJwk };
+    return { ...payload, signature: await signPayload(payload) };
+  }
+  async function verifyPacket(packet, trustedSigningPublicJwk) {
+    if (!packet || typeof packet !== 'object' || Array.isArray(packet) || !trustedSigningPublicJwk) return false;
+    const includedKey = packet.sender_signing_key;
+    if (!includedKey || includedKey.kty !== trustedSigningPublicJwk.kty || includedKey.crv !== trustedSigningPublicJwk.crv
+      || includedKey.x !== trustedSigningPublicJwk.x || includedKey.y !== trustedSigningPublicJwk.y) return false;
+    const payload = { ...packet };
+    delete payload.signature;
+    return verifyPayload(trustedSigningPublicJwk, payload, packet.signature);
   }
 
   async function deriveAesKey(privateKey, peerPublicJwk, salt, usages) {
@@ -153,6 +216,16 @@ const ProxiCrypto = (() => {
     return [...new Uint8Array(hash)].slice(0, 12).map(byte => byte.toString(16).padStart(2, '0').toUpperCase()).join('').match(/.{4}/g).join(' ');
   }
 
-  function clearMemory() { currentUserId = null; currentPrivateKey = null; currentPublicJwk = null; }
-  return { ensureIdentity, encryptFor, decryptFromMe, decryptWithPrivateKey, encryptLocalData, decryptLocalData, fingerprint, clearMemory };
+  function clearMemory() {
+    currentUserId = null;
+    currentPrivateKey = null;
+    currentPublicJwk = null;
+    currentSigningPrivateKey = null;
+    currentSigningPublicJwk = null;
+  }
+  return {
+    ensureIdentity, getSigningPublicKey, signPayload, verifyPayload, signPacket, verifyPacket,
+    encryptFor, decryptFromMe, decryptWithPrivateKey, encryptLocalData, decryptLocalData,
+    fingerprint, clearMemory,
+  };
 })();
