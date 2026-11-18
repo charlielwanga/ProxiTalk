@@ -4,7 +4,7 @@ The selected product direction is hybrid: internet delivery when available and n
 
 ## Current Android build
 
-- `MainActivity.java` serves bundled web assets from `https://appassets.androidplatform.net`, restricts navigation to the bundled app, and accepts the narrow Supabase PKCE callback.
+- `MainActivity.java` serves bundled web assets from `https://appassets.androidplatform.net`, restricts navigation to the bundled app, and accepts the narrow Supabase PKCE callback used by email and Google sign-in.
 - `BleMeshService.java` starts only after the user opts in, requests Android BLE permissions, advertises/scans at low power, and displays an ongoing foreground notification. It exposes only an anonymous peer count; device addresses/names stay native.
 - The GATT prototype accepts bounded, fragmented JSON envelopes that contain only recipient-key-encrypted ciphertext plus routing metadata. It rejects plaintext `text`/`body` fields and expired packets.
 - This is still an unauthenticated, one-hop carrier experiment: no sender identity proof, chat receive/send integration, recipient delivery receipt, durable storage, relay, or cloud fallback. Do not describe it as offline messaging.

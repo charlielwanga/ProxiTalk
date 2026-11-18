@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>ProxiTalk — Encrypted Online Messaging</title>
-<meta name="description" content="ProxiTalk encrypted online messaging. Sign in with email and share your ProxiTalk ID to chat.">
+<meta name="description" content="ProxiTalk encrypted online messaging. Sign in with Google or email and share your ProxiTalk ID to chat.">
 <meta name="theme-color" content="#0B3D3A">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://hsgcsyhyzsftinisksty.supabase.co wss://hsgcsyhyzsftinisksty.supabase.co; media-src 'self' blob:; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <link rel="manifest" href="manifest.json">
@@ -17,12 +17,14 @@
   <section class="auth-card">
     <div class="auth-mark">◉</div>
     <h1 id="authTitle">Welcome to ProxiTalk</h1>
-    <p id="authIntro">Sign in with your email to create an encrypted messaging identity.</p>
+    <p id="authIntro">Sign in with Google or your email to create an encrypted messaging identity.</p>
     <form id="authForm">
       <label for="authEmail">Email address</label>
       <input id="authEmail" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com">
       <button class="btn-primary" type="submit">Email me a sign-in link</button>
     </form>
+    <div class="auth-divider"><span>or</span></div>
+    <button id="googleSignIn" class="auth-google" type="button">Continue with Google</button>
     <p id="authStatus" class="auth-status" role="status" aria-live="polite"></p>
     <button id="continueOffline" class="auth-offline" type="button">Continue to local drafts without sign-in</button>
     <form id="profileForm" class="hidden">

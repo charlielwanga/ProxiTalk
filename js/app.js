@@ -146,6 +146,8 @@
       currentProfile = await ProxiCloud.findDirectoryByUserId(authUser.id);
       if (!currentProfile) {
         $('authForm').classList.add('hidden');
+        $('googleSignIn').classList.add('hidden');
+        document.querySelector('.auth-divider').classList.add('hidden');
         $('continueOffline').classList.add('hidden');
         $('profileForm').classList.remove('hidden');
         $('authIntro').textContent = 'Choose a display name to create your ProxiTalk identity.';
@@ -174,6 +176,17 @@
       status.textContent = 'Check your inbox and open the link in this browser. The link expires soon.';
     } catch (error) { status.textContent = error.message || 'Could not send the sign-in link.'; }
     finally { button.disabled = false; }
+  });
+  $('googleSignIn').addEventListener('click', async () => {
+    const button = $('googleSignIn');
+    const status = $('authStatus');
+    button.disabled = true;
+    status.textContent = 'Opening Google sign-in…';
+    try { await ProxiAuth.signInWithGoogle(); }
+    catch (error) {
+      status.textContent = error.message || 'Could not start Google sign-in. Check that Google is enabled for this app.';
+      button.disabled = false;
+    }
   });
   $('continueOffline').addEventListener('click', () => {
     sessionStorage.setItem('proxitalk_continue_offline', '1');
@@ -218,6 +231,8 @@
     } catch (error) { $('authStatus').textContent = error.message; }
   } else if (authUser) {
     $('authForm').classList.add('hidden');
+    $('googleSignIn').classList.add('hidden');
+    document.querySelector('.auth-divider').classList.add('hidden');
     $('continueOffline').classList.add('hidden');
     $('profileForm').classList.remove('hidden');
     $('authIntro').textContent = 'Choose a display name to create your ProxiTalk identity.';

@@ -18,7 +18,7 @@ import android.webkit.WebViewClient;
 
 import androidx.webkit.WebViewAssetLoader;
 
-/** Android 13+ secure-origin WebView host with opt-in BLE discovery (no message relay yet). */
+/** Android 13+ secure-origin WebView host with PKCE auth callbacks and opt-in BLE discovery. */
 public class MainActivity extends Activity {
 
     private static final String APP_ORIGIN = "https://appassets.androidplatform.net";
@@ -134,8 +134,15 @@ public class MainActivity extends Activity {
         if (data == null || !AUTH_SCHEME.equals(data.getScheme())
                 || !AUTH_HOST.equals(data.getHost()) || !AUTH_PATH.equals(data.getPath())) return;
         String code = data.getQueryParameter("code");
-        if (code == null || code.isEmpty() || code.length() > 4096) return;
-        pendingAuthUrl = APP_ENTRY_URL + "?code=" + Uri.encode(code);
+        if (code != null && !code.isEmpty() && code.length() <= 4096) {
+            pendingAuthUrl = APP_ENTRY_URL + "?code=" + Uri.encode(code);
+        } else {
+            String error = data.getQueryParameter("error");
+            if (error == null || error.isEmpty() || error.length() > 256) return;
+            String description = data.getQueryParameter("error_description");
+            pendingAuthUrl = APP_ENTRY_URL + "?error=" + Uri.encode(error)
+                    + (description == null ? "" : "&error_description=" + Uri.encode(description.substring(0, Math.min(description.length(), 1024))));
+        }
         loadPendingAuthUrl();
     }
 

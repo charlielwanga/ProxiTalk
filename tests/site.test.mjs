@@ -160,6 +160,46 @@ test('authentication restores a saved session from persistent browser storage af
   assert.equal(persistent.has('proxitalk_auth_session_v1'), true);
 });
 
+test('Google OAuth uses a saved PKCE verifier and the configured app redirect', async () => {
+  const source = await read('js/auth.js');
+  const local = new Map();
+  const storage = {
+    getItem: key => local.get(key) ?? null,
+    setItem: (key, value) => local.set(key, String(value)),
+    removeItem: key => local.delete(key),
+  };
+  const assigned = [];
+  const auth = runInNewContext(source + String.fromCharCode(10) + 'ProxiAuth', {
+    window: {
+      ProxiTalkConfig: { supabaseUrl: 'https://project.supabase.co', publishableKey: 'test-publishable' },
+      location: { assign: value => assigned.push(value) },
+    },
+    localStorage: storage, sessionStorage: storage, crypto: webcrypto, URL, URLSearchParams, TextEncoder, btoa,
+    location: { href: 'https://charlielwanga.github.io/ProxiTalk/', origin: 'https://charlielwanga.github.io', pathname: '/ProxiTalk/' },
+    history: { replaceState() {} },
+  });
+  await auth.signInWithGoogle();
+  const authorize = new URL(assigned[0]);
+  assert.equal(authorize.origin, 'https://project.supabase.co');
+  assert.equal(authorize.pathname, '/auth/v1/authorize');
+  assert.equal(authorize.searchParams.get('provider'), 'google');
+  assert.equal(authorize.searchParams.get('redirect_to'), 'https://charlielwanga.github.io/ProxiTalk/');
+  assert.equal(authorize.searchParams.get('code_challenge_method'), 's256');
+  const verifier = JSON.parse(local.get('proxitalk_auth_pkce_verifier')).value;
+  const digest = new Uint8Array(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  const challenge = btoa(String.fromCharCode(...digest)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+  assert.equal(authorize.searchParams.get('code_challenge'), challenge);
+
+  const callbackAuth = runInNewContext(source + String.fromCharCode(10) + 'ProxiAuth', {
+    window: { ProxiTalkConfig: { supabaseUrl: 'https://project.supabase.co', publishableKey: 'test-publishable' } },
+    localStorage: storage, sessionStorage: storage, crypto: webcrypto, URL, URLSearchParams, TextEncoder, btoa,
+    location: { href: 'https://charlielwanga.github.io/ProxiTalk/?error=access_denied&error_description=Sign-in%20cancelled', origin: 'https://charlielwanga.github.io', pathname: '/ProxiTalk/' },
+    history: { replaceState() {} },
+  });
+  assert.equal(await callbackAuth.initialize(), null);
+  assert.equal(callbackAuth.getError(), 'Sign-in cancelled');
+});
+
 test('fresh installs have no seeded conversations or fake network replies', async () => {
   const app = await read('js/app.js');
   assert.match(app, /Store\.load\('contacts', \[\]\)/);
@@ -173,6 +213,10 @@ test('browser connects only through the authenticated Supabase client and limits
   const config = await read('js/config.js');
   const auth = await read('js/auth.js');
   assert.match(auth, /code_challenge_method: 's256'/);
+  assert.match(auth, /signInWithGoogle/);
+  assert.match(auth, /auth\/v1\/authorize/);
+  assert.match(html, /id="googleSignIn"/);
+  assert.match(html, /Continue with Google/);
   assert.match(auth, /grant_type=pkce/);
   assert.match(auth, /localStorage\.getItem\(STORAGE_KEY\)/);
   assert.match(auth, /localStorage\.setItem\(STORAGE_KEY, serialized\)/);
@@ -256,8 +300,9 @@ test('Android 13 app shell uses a secure asset origin and a narrow PKCE deep lin
   assert.doesNotMatch(activity, /request\.grant|sendPacket/);
   assert.match(activity, /setAllowFileAccessFromFileURLs\(false\)/);
   assert.match(activity, /setAllowUniversalAccessFromFileURLs\(false\)/);
-  assert.match(activity, /code\.length\(\) > 4096/);
+  assert.match(activity, /code\.length\(\) <= 4096/);
   assert.match(activity, /getAuthRedirectUrl\(\)/);
+  assert.match(activity, /getQueryParameter\("error"\)/);
   assert.match(manifest, /android:allowBackup="false"/);
   assert.match(manifest, /android:usesCleartextTraffic="false"/);
   assert.match(manifest, /android:scheme="com\.proxitalk\.app" android:host="auth" android:path="\/callback"/);

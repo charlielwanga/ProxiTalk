@@ -76,6 +76,14 @@ const ProxiAuth = (() => {
   }
   async function acceptAuthCallback() {
     const url = new URL(location.href);
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    const callbackErrorCode = url.searchParams.get('error') || fragment.get('error');
+    if (callbackErrorCode) {
+      callbackError = url.searchParams.get('error_description') || fragment.get('error_description') || callbackErrorCode;
+      clearVerifier();
+      cleanCallbackUrl();
+      return false;
+    }
     const code = url.searchParams.get('code');
     if (code) {
       const verifier = readVerifier();
@@ -138,18 +146,34 @@ const ProxiAuth = (() => {
     } catch (_) {}
     return location.origin + location.pathname;
   }
-  async function sendMagicLink(email) {
-    callbackError = '';
-    const redirect = authRedirectUri();
+  async function createPkcePair() {
     const verifier = base64Url(crypto.getRandomValues(new Uint8Array(32)));
     const challenge = base64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
     saveVerifier(verifier);
+    return { verifier, challenge };
+  }
+  async function sendMagicLink(email) {
+    callbackError = '';
+    const redirect = authRedirectUri();
+    const { challenge } = await createPkcePair();
     try {
       await request('/auth/v1/otp?redirect_to=' + encodeURIComponent(redirect), {
         method: 'POST', headers: headers(),
         body: JSON.stringify({ email: email.trim().toLowerCase(), create_user: true, code_challenge: challenge, code_challenge_method: 's256' }),
       });
     } catch (error) { clearVerifier(); throw error; }
+  }
+  async function signInWithGoogle() {
+    callbackError = '';
+    const redirect = authRedirectUri();
+    const { challenge } = await createPkcePair();
+    const authorizeUrl = new URL('/auth/v1/authorize', cfg.supabaseUrl);
+    authorizeUrl.searchParams.set('provider', 'google');
+    authorizeUrl.searchParams.set('redirect_to', redirect);
+    authorizeUrl.searchParams.set('code_challenge', challenge);
+    authorizeUrl.searchParams.set('code_challenge_method', 's256');
+    try { window.location.assign(authorizeUrl.toString()); }
+    catch (error) { clearVerifier(); throw error; }
   }
   async function accessToken() {
     const valid = await getValidSession();
@@ -165,5 +189,5 @@ const ProxiAuth = (() => {
   function isSignedIn() { return !!(session?.access_token && user?.id); }
   function getConfig() { return { url: cfg.supabaseUrl }; }
 
-  return { initialize, sendMagicLink, accessToken, signOut, getUser, getError, isSignedIn, getConfig };
+  return { initialize, sendMagicLink, signInWithGoogle, accessToken, signOut, getUser, getError, isSignedIn, getConfig };
 })();

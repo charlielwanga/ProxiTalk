@@ -1,12 +1,12 @@
 # ProxiTalk — early-access encrypted messaging
 
-ProxiTalk now has an initial **one-to-one, internet-delivered text-message path**. Users sign in with an email magic link, create a ProxiTalk ID, look up another ID, and send recipient-key-encrypted text through an authenticated Supabase mailbox. The mailbox stores ciphertext; it is not a Bluetooth mesh network.
+ProxiTalk now has an initial **one-to-one, internet-delivered text-message path**. Users sign in with a Google account or email magic link, create a ProxiTalk ID, look up another ID, and send recipient-key-encrypted text through an authenticated Supabase mailbox. The mailbox stores ciphertext; it is not a Bluetooth mesh network.
 
 This is an early-access implementation, **not yet production-ready**. One real Web-to-Android text delivery has been observed and acknowledged, but the full two-account acceptance matrix, independent cryptographic/security review, and production operations review remain incomplete. Do not use it for emergencies or high-risk communication.
 
 ## Current scope
 
-- Email magic-link sign-in and public ProxiTalk ID directory.
+- Google OAuth (PKCE) and email magic-link sign-in, plus a public ProxiTalk ID directory. Google OAuth UI/flow is implemented; the Supabase provider remains disabled until the project owner adds OAuth credentials in the Supabase dashboard.
 - One-to-one text messages over the internet. Browser Web Crypto uses ephemeral P-256 ECDH, HKDF-SHA-256, and AES-256-GCM; the server receives an encrypted envelope.
 - Recipient polling and authenticated row-level security for directory and mailbox records. Messages expire from the pending query after 14 days; expired-row cleanup/retention automation is not yet configured.
 - Non-extractable device ECDH and ECDSA private keys are stored in IndexedDB; the public keys are provisioned in the directory. Android's experimental one-hop BLE text path signs the packet and verifies the sender against that directory key before decrypting/displaying it. Signed-in local chat history is encrypted at rest with a device-derived key; local contacts/IDs remain in browser storage.
@@ -38,6 +38,7 @@ Open `http://localhost:8000`. Use `npm run dev` for the root site. `dist/` is th
 - The browser uses the Supabase **publishable** key in `js/config.js`. That key is intended to be public. Never add a secret/service-role key to client code. Database RLS policies—not key secrecy—must protect user data.
 - Supabase migrations are recorded under `supabase/migrations/`; the authenticated directory/mailbox migration and nullable directory signing-key migration have been applied to project `hsgcsyhyzsftinisksty`.
 - Supabase Auth's site URL and redirect allow-list include the current GitHub Pages URL and Android callback URI. Email confirmation remains enabled. Configure and verify a production SMTP sender before inviting general users; the default Supabase mailer is not an appropriate production mail-delivery setup.
+- To activate Google sign-in, create a **Web application** OAuth client in Google Cloud Console. Add `https://hsgcsyhyzsftinisksty.supabase.co/auth/v1/callback` as its authorized redirect URI (use the callback displayed by Supabase if it differs). In Supabase Dashboard → Authentication → Providers → Google, enable Google and enter that client ID and client secret. Keep the secret only in Supabase; never put it in this repository, the browser bundle, or chat. The Supabase project currently reports Google provider disabled until these owner-provided credentials are saved. The existing Supabase redirect allow-list already includes `https://charlielwanga.github.io/ProxiTalk/` and `com.proxitalk.app://auth/callback`.
 - `.github/workflows/android-debug-apk.yml` builds a sideloadable debug APK on pushes to this branch or manual dispatch. CI builds have succeeded; artifacts are for device testing only, not release-signed builds. Do not uninstall the currently installed app to apply a test APK unless its device-bound key has been safely migrated.
 
 ## Verification and release gates
