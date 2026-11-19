@@ -11,7 +11,8 @@ The selected product direction is hybrid: internet delivery when available and n
 - `AndroidManifest.xml` declares Android 12+ BLE permissions, the connected-device foreground service and notifications. `allowBackup` remains disabled because the device key is non-exportable and cannot currently be recovered.
 - `npm run build:android` builds the web app and copies it into ignored `android/app/src/main/assets/www/` assets.
 - Calls use WebRTC audio/video with direct peer-to-peer DTLS-SRTP media. Supabase stores only short-lived, encrypted-and-signed SDP/ICE signaling rows, protected by participant RLS. Calls are foreground-only, need both apps online/open, use public STUN only, and have no TURN relay, push ringing, or physical-device acceptance test. Some mobile networks will fail to connect.
-- `.github/workflows/android-debug-apk.yml` builds a sideloadable debug APK through CI. It is not Play Store/release signed.
+- The gold-and-black ProxiTalk mark is used for Android launcher icons and the web/PWA brand. `versionCode` is incremented for each APK build.
+- `.github/workflows/android-debug-apk.yml` builds a sideloadable debug APK through CI as artifact `proxitalk-android-v1.2.0-beta1` (30-day retention). It is not Play Store/release signed. Android updates require the same signing certificate; the CI debug keystore is not a durable release key, so compatibility with APKs from older runs must be verified before updating an installed copy.
 
 ## Calls (beta validation)
 

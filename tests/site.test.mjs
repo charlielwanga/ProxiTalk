@@ -346,15 +346,20 @@ test('Android 13 app shell uses a secure asset origin and a narrow PKCE deep lin
   assert.match(activity, /getAuthRedirectUrl\(\)/);
   assert.match(activity, /getQueryParameter\("error"\)/);
   assert.match(manifest, /android:allowBackup="false"/);
+  assert.match(manifest, /android:icon="@mipmap\/ic_launcher"/);
+  assert.match(manifest, /android:roundIcon="@mipmap\/ic_launcher_round"/);
   assert.match(manifest, /android:usesCleartextTraffic="false"/);
+  assert.match(await read('manifest.json'), /proxitalk-app-icon\.png/);
   assert.match(manifest, /android:scheme="com\.proxitalk\.app" android:host="auth" android:path="\/callback"/);
   assert.match(auth, /com\.proxitalk\.app:\/\/auth\/callback/);
   assert.match(gradle, /targetSdk rootProject\.ext\.targetSdk/);
-  assert.match(await read('android/build.gradle'), /versionCode = 2/);
+  assert.match(await read('android/build.gradle'), /versionCode = 3/);
   assert.match(workflow, /java-version: '17'/);
   assert.match(workflow, /gradle-version: '8\.7'/);
   assert.match(workflow, /assembleDebug/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
+  assert.match(workflow, /proxitalk-android-v1\.2\.0-beta1/);
+  assert.match(workflow, /retention-days: 30/);
   assert.doesNotMatch(manifest, /READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE/);
 });
 
@@ -400,11 +405,11 @@ test('calls encrypt and device-sign signaling, use WebRTC, and keep RLS particip
 });
 
 test('static build includes the complete application shell and service worker never caches APIs', async () => {
-  for (const file of ['dist/index.html', 'dist/manifest.json', 'dist/sw.js', 'dist/css/style.css', 'dist/js/config.js', 'dist/js/storage.js', 'dist/js/crypto.js', 'dist/js/auth.js', 'dist/js/cloud.js', 'dist/js/ble.js', 'dist/js/mesh.js', 'dist/js/calls.js', 'dist/js/app.js', 'dist/assets/icon.svg', 'android/app/src/main/assets/www/index.html']) {
+  for (const file of ['dist/index.html', 'dist/manifest.json', 'dist/sw.js', 'dist/css/style.css', 'dist/js/config.js', 'dist/js/storage.js', 'dist/js/crypto.js', 'dist/js/auth.js', 'dist/js/cloud.js', 'dist/js/ble.js', 'dist/js/mesh.js', 'dist/js/calls.js', 'dist/js/app.js', 'dist/assets/icon.svg', 'dist/assets/proxitalk-app-icon.png', 'dist/assets/proxitalk-app-icon-maskable.png', 'android/app/src/main/assets/www/index.html']) {
     await assert.doesNotReject(access(resolve(root, file)), file);
   }
   const sw = await read('dist/sw.js');
-  assert.match(sw, /const CACHE = 'proxitalk-shell-v12'/);
+  assert.match(sw, /const CACHE = 'proxitalk-shell-v13'/);
   const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
   assert.ok(assetList, 'service worker should declare its precache list');
   const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);

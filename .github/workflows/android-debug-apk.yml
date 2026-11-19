@@ -34,7 +34,7 @@ jobs:
       - run: gradle -p android assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: proxitalk-android-debug-apk
+          name: proxitalk-android-v1.2.0-beta1
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30

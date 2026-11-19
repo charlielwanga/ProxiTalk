@@ -1,14 +1,15 @@
 {
-  "name": "ProxiTalk — Local Preview",
+  "name": "ProxiTalk",
   "short_name": "ProxiTalk",
-  "description": "Early-access local-first messaging interface. Messages are not transmitted.",
+  "description": "Encrypted one-to-one messaging and beta voice/video calls.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0B141A",
-  "theme_color": "#0B3D3A",
+  "background_color": "#080807",
+  "theme_color": "#080807",
   "orientation": "portrait",
   "icons": [
-    { "src": "./assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "./assets/proxitalk-app-icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./assets/proxitalk-app-icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

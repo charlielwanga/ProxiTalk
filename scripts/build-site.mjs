@@ -19,6 +19,8 @@ const files = [
   'js/calls.js',
   'js/app.js',
   'assets/icon.svg',
+  'assets/proxitalk-app-icon.png',
+  'assets/proxitalk-app-icon-maskable.png',
 ];
 
 await rm(out, { recursive: true, force: true });
