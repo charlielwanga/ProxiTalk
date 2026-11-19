@@ -1,6 +1,6 @@
 # ProxiTalk Android — Android 13 test target
 
-The selected product direction is hybrid: internet delivery when available and native BLE handoff when offline. **Android 13 (API 33) is the first physical test target.** The app includes beta one-to-one WebRTC voice/video calls for saved contacts and an opt-in foreground BLE/GATT text path. Calls and BLE still require physical-device testing.
+The selected product direction is hybrid: internet delivery when available and native BLE handoff when offline. **Android 13 (API 33) is the first physical test target.** The app uses a black-and-gold visual theme, beta one-to-one WebRTC voice/video calls for saved contacts, and an opt-in foreground BLE/GATT text path. Onboarding requires a Uganda mobile number as the ProxiTalk ID; that ID is visible to signed-in directory users, and phone ownership is not SMS-verified because phone auth/SMS is not configured. Calls and BLE still require physical-device testing.
 
 ## Current Android build
 
@@ -12,7 +12,7 @@ The selected product direction is hybrid: internet delivery when available and n
 - `npm run build:android` builds the web app and copies it into ignored `android/app/src/main/assets/www/` assets.
 - Calls use WebRTC audio/video with direct peer-to-peer DTLS-SRTP media. Supabase stores only short-lived, encrypted-and-signed SDP/ICE signaling rows, protected by participant RLS. Calls are foreground-only, need both apps online/open, use public STUN only, and have no TURN relay, push ringing, or physical-device acceptance test. Some mobile networks will fail to connect.
 - The gold-and-black ProxiTalk mark is used for Android launcher icons and the web/PWA brand. `versionCode` is incremented for each APK build.
-- `.github/workflows/android-debug-apk.yml` builds a sideloadable debug APK through CI as artifact `proxitalk-android-v1.2.0-beta1` (30-day retention). It is not Play Store/release signed. Android updates require the same signing certificate; the CI debug keystore is not a durable release key, so compatibility with APKs from older runs must be verified before updating an installed copy.
+- `.github/workflows/android-debug-apk.yml` builds a sideloadable debug APK through CI as artifact `proxitalk-android-v1.2.0-beta2` (30-day retention). It is not Play Store/release signed. Android updates require the same signing certificate; the CI debug keystore is not a durable release key, so compatibility with APKs from older runs must be verified before updating an installed copy.
 
 ## Calls (beta validation)
 

@@ -52,6 +52,16 @@ const ProxiCloud = (() => {
     return rows?.[0] || null;
   }
 
+  async function updateDirectoryIdentity(userId, proxiId, displayName) {
+    const id = encodeURIComponent('eq.' + userId);
+    const rows = await api(`proxitalk_directory?user_id=${id}`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ proxitalk_id: proxiId, display_name: displayName }),
+    });
+    return rows?.[0] || null;
+  }
+
   async function updateDirectorySigningKey(userId, signingPublicKey) {
     const id = encodeURIComponent('eq.' + userId);
     const rows = await api(`proxitalk_directory?user_id=${id}`, {
@@ -127,6 +137,6 @@ const ProxiCloud = (() => {
     return received;
   }
 
-  return { findDirectoryById, findDirectoryByUserId, createDirectoryProfile, updateDirectorySigningKey,
+  return { findDirectoryById, findDirectoryByUserId, createDirectoryProfile, updateDirectoryIdentity, updateDirectorySigningKey,
     sendEncryptedMessage, receivePending, sendCallSignal, receiveCallSignals, deleteCallSignal, pruneCallSignals };
 })();

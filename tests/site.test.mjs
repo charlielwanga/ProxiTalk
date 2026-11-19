@@ -7,13 +7,26 @@ import { webcrypto } from 'node:crypto';
 
 const root = resolve(import.meta.dirname, '..');
 const read = file => readFile(resolve(root, file), 'utf8');
-const runtime = ['js/config.js', 'js/storage.js', 'js/crypto.js', 'js/auth.js', 'js/cloud.js', 'js/ble.js', 'js/mesh.js', 'js/calls.js', 'js/app.js'];
+const runtime = ['js/config.js', 'js/storage.js', 'js/crypto.js', 'js/auth.js', 'js/cloud.js', 'js/ble.js', 'js/mesh.js', 'js/calls.js', 'js/identity.js', 'js/app.js'];
 
 test('runtime JavaScript parses', async () => {
   for (const file of runtime) {
     const source = await read(file);
     assert.doesNotThrow(() => new Function(source), file);
   }
+});
+
+test('Uganda phone IDs normalize to 2567xxxxxxxx and reject invalid numbers', async () => {
+  const source = await read('js/identity.js');
+  const identity = runInNewContext(source + '\nProxiIdentity', {});
+  assert.equal(identity.normalizeUgandaPhone('0772 123 456'), '256772123456');
+  assert.equal(identity.normalizeUgandaPhone('+256 772-123-456'), '256772123456');
+  assert.equal(identity.normalizeUgandaPhone('256772123456'), '256772123456');
+  assert.equal(identity.isProxiTalkId('256772123456'), true);
+  assert.equal(identity.normalizeUgandaPhone('0772 123 45'), null);
+  assert.equal(identity.normalizeUgandaPhone('256782123456'), '256782123456');
+  assert.equal(identity.normalizeUgandaPhone('256312123456'), null);
+  assert.equal(identity.normalizeUgandaPhone('PT-1A2B3C4D'), null);
 });
 
 function cryptoHarness(source) {
@@ -160,6 +173,26 @@ test('directory signing-key migration is additive and owner-scoped', async () =>
   assert.match(cloud, /signing_public_key: profile\.signingPublicKey/);
 });
 
+test('new directory IDs are Uganda phone numbers while legacy IDs can be migrated by their owner', async () => {
+  const migration = await read('supabase/migrations/20261119110648_phone_based_proxitalk_ids.sql');
+  const cloud = await read('js/cloud.js');
+  const app = await read('js/app.js');
+  const html = await read('index.html');
+  const theme = await read('css/style.css');
+  assert.match(html, /id="profilePhone" type="tel"/);
+  assert.match(html, /Your ProxiTalk ID will be this number/);
+  assert.match(theme, /--bg:#080807/);
+  assert.match(theme, /--gold:#D8B45A/);
+  assert.match(migration, /2567\[0-9\]\{8\}/);
+  assert.match(migration, /UPDATE OF proxitalk_id/);
+  assert.match(migration, /GRANT UPDATE \(proxitalk_id, display_name\)/);
+  assert.match(cloud, /updateDirectoryIdentity/);
+  assert.match(cloud, /proxitalk_id: proxiId/);
+  assert.match(app, /normalizeUgandaPhone/);
+  assert.match(app, /showProfileSetup\(true\)/);
+  assert.match(app, /visible to signed-in directory users/);
+});
+
 test('mailbox send accepts UI camelCase and database snake_case contact keys', async () => {
   const source = await read('js/cloud.js');
   const requests = [];
@@ -176,10 +209,14 @@ test('mailbox send accepts UI camelCase and database snake_case contact keys', a
   const key = { x: 'public-x' };
   const camelRow = await ProxiCloud.sendEncryptedMessage('sender', { userId: 'recipient-a', publicKey: key }, 'hello');
   const snakeRow = await ProxiCloud.sendEncryptedMessage('sender', { user_id: 'recipient-b', public_key: key }, 'hello');
+  const updated = await ProxiCloud.updateDirectoryIdentity('user-1', '256772123456', 'Alice');
   assert.equal(camelRow.id, 'message-row');
   assert.equal(snakeRow.id, 'message-row');
+  assert.equal(updated.id, 'message-row');
   assert.equal(JSON.parse(requests[0].options.body).recipient_id, 'recipient-a');
   assert.equal(JSON.parse(requests[1].options.body).recipient_id, 'recipient-b');
+  assert.match(requests[2].url, /proxitalk_directory\?user_id=eq\.user-1$/);
+  assert.deepEqual(JSON.parse(requests[2].options.body), { proxitalk_id: '256772123456', display_name: 'Alice' });
 });
 
 test('authentication restores a saved session from persistent browser storage after reload', async () => {
@@ -379,12 +416,12 @@ test('Android 13 app shell uses a secure asset origin and a narrow PKCE deep lin
   assert.match(manifest, /android:scheme="com\.proxitalk\.app" android:host="auth" android:path="\/callback"/);
   assert.match(auth, /com\.proxitalk\.app:\/\/auth\/callback/);
   assert.match(gradle, /targetSdk rootProject\.ext\.targetSdk/);
-  assert.match(await read('android/build.gradle'), /versionCode = 3/);
+  assert.match(await read('android/build.gradle'), /versionCode = 4/);
   assert.match(workflow, /java-version: '17'/);
   assert.match(workflow, /gradle-version: '8\.7'/);
   assert.match(workflow, /assembleDebug/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
-  assert.match(workflow, /proxitalk-android-v1\.2\.0-beta1/);
+  assert.match(workflow, /proxitalk-android-v1\.2\.0-beta2/);
   assert.match(workflow, /retention-days: 30/);
   assert.doesNotMatch(manifest, /READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE/);
 });
@@ -431,11 +468,11 @@ test('calls encrypt and device-sign signaling, use WebRTC, and keep RLS particip
 });
 
 test('static build includes the complete application shell and service worker never caches APIs', async () => {
-  for (const file of ['dist/index.html', 'dist/manifest.json', 'dist/sw.js', 'dist/css/style.css', 'dist/js/config.js', 'dist/js/storage.js', 'dist/js/crypto.js', 'dist/js/auth.js', 'dist/js/cloud.js', 'dist/js/ble.js', 'dist/js/mesh.js', 'dist/js/calls.js', 'dist/js/app.js', 'dist/assets/icon.svg', 'dist/assets/proxitalk-app-icon.png', 'dist/assets/proxitalk-app-icon-maskable.png', 'android/app/src/main/assets/www/index.html']) {
+  for (const file of ['dist/index.html', 'dist/manifest.json', 'dist/sw.js', 'dist/css/style.css', 'dist/css/theme-overrides.css', 'dist/js/config.js', 'dist/js/storage.js', 'dist/js/crypto.js', 'dist/js/auth.js', 'dist/js/cloud.js', 'dist/js/ble.js', 'dist/js/mesh.js', 'dist/js/calls.js', 'dist/js/identity.js', 'dist/js/app.js', 'dist/assets/icon.svg', 'dist/assets/proxitalk-app-icon.png', 'dist/assets/proxitalk-app-icon-maskable.png', 'android/app/src/main/assets/www/index.html']) {
     await assert.doesNotReject(access(resolve(root, file)), file);
   }
   const sw = await read('dist/sw.js');
-  assert.match(sw, /const CACHE = 'proxitalk-shell-v13'/);
+  assert.match(sw, /const CACHE = 'proxitalk-shell-v14'/);
   const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
   assert.ok(assetList, 'service worker should declare its precache list');
   const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);

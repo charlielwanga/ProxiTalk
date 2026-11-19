@@ -1,9 +1,9 @@
 /* ProxiTalk application-shell cache only. Auth, API, and message requests are never cached. */
-const CACHE = 'proxitalk-shell-v13';
+const CACHE = 'proxitalk-shell-v14';
 const ASSETS = [
   './', './index.html', './manifest.json', './assets/icon.svg', './assets/proxitalk-app-icon.png', './assets/proxitalk-app-icon-maskable.png',
-  './css/style.css', './js/config.js', './js/storage.js', './js/crypto.js',
-  './js/auth.js', './js/cloud.js', './js/ble.js', './js/mesh.js', './js/calls.js', './js/app.js',
+  './css/style.css', './css/theme-overrides.css', './js/config.js', './js/storage.js', './js/crypto.js',
+  './js/auth.js', './js/cloud.js', './js/ble.js', './js/mesh.js', './js/calls.js', './js/identity.js', './js/app.js',
 ];
 
 self.addEventListener('install', event => {

@@ -117,7 +117,7 @@
     return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
   }
   function esc(s) { return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-  function safeColor(value) { return /^#[0-9a-f]{6}$/i.test(String(value || '')) ? value : '#128C7E'; }
+  function safeColor(value) { return /^#[0-9a-f]{6}$/i.test(String(value || '')) ? value : '#9A7939'; }
   function safeImageUrl(value) { return /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/]+=*$/i.test(String(value || '')) ? value : ''; }
   function ticks(status) {
     if (status === 'read') return '<span class="ticks read">✓✓</span>';
@@ -138,6 +138,22 @@
   const $ = id => document.getElementById(id);
   const chatListEl = $('chatList'), messagesEl = $('messages');
 
+  function showProfileSetup(isExistingProfile = false, allowCancel = false) {
+    $('authForm').classList.add('hidden');
+    $('googleSignIn').classList.add('hidden');
+    document.querySelector('.auth-divider').classList.add('hidden');
+    $('continueOffline').classList.add('hidden');
+    $('profileForm').classList.remove('hidden');
+    $('profileName').value = currentProfile?.display_name || '';
+    $('profilePhone').value = '';
+    $('profileSubmit').textContent = isExistingProfile ? 'Update my ProxiTalk ID' : 'Create my ProxiTalk ID';
+    $('profileCancel').classList.toggle('hidden', !allowCancel);
+    $('authIntro').textContent = isExistingProfile
+      ? 'Update your existing profile with a Uganda mobile number. Your ProxiTalk ID will change to that number.'
+      : 'Create your ProxiTalk identity. Your Uganda mobile number will become your ProxiTalk ID.';
+    $('authStatus').textContent = '';
+  }
+
   async function finishSignIn() {
     const status = $('authStatus');
     try {
@@ -146,13 +162,7 @@
       Store.setNamespace(authUser.id);
       currentProfile = await ProxiCloud.findDirectoryByUserId(authUser.id);
       if (!currentProfile) {
-        $('authForm').classList.add('hidden');
-        $('googleSignIn').classList.add('hidden');
-        document.querySelector('.auth-divider').classList.add('hidden');
-        $('continueOffline').classList.add('hidden');
-        $('profileForm').classList.remove('hidden');
-        $('authIntro').textContent = 'Choose a display name to create your ProxiTalk identity.';
-        status.textContent = '';
+        showProfileSetup(false);
         return;
       }
       const publicKey = await ProxiCrypto.ensureIdentity(authUser.id);
@@ -196,34 +206,44 @@
   $('profileForm').addEventListener('submit', async event => {
     event.preventDefault();
     if (!authUser) return;
-    const button = $('profileForm').querySelector('button[type="submit"]');
+    const button = $('profileSubmit');
     button.disabled = true;
     try {
       const displayName = $('profileName').value.trim().replace(/\s+/g, ' ');
       if (!displayName || displayName.length > 48) throw new Error('Enter a display name of 1 to 48 characters.');
-      const publicKey = await ProxiCrypto.ensureIdentity(authUser.id);
-      const signingPublicKey = ProxiCrypto.getSigningPublicKey();
-      let record = null;
-      for (let attempt = 0; attempt < 3 && !record; attempt++) {
-        const id = 'PT-' + crypto.getRandomValues(new Uint32Array(1))[0].toString(16).padStart(8, '0').toUpperCase();
-        try { record = await ProxiCloud.createDirectoryProfile({ userId: authUser.id, proxiId: id, displayName, publicKey, signingPublicKey }); }
-        catch (error) { if (attempt === 2) throw error; }
+      const phoneId = ProxiIdentity.normalizeUgandaPhone($('profilePhone').value);
+      if (!phoneId) throw new Error('Enter a Uganda mobile number like 0772 123 456 or +256 772 123 456.');
+      if (currentProfile) {
+        const updated = await ProxiCloud.updateDirectoryIdentity(authUser.id, phoneId, displayName);
+        if (!updated) throw new Error('Your profile was not updated. Please try again.');
+      } else {
+        const publicKey = await ProxiCrypto.ensureIdentity(authUser.id);
+        const signingPublicKey = ProxiCrypto.getSigningPublicKey();
+        await ProxiCloud.createDirectoryProfile({
+          userId: authUser.id, proxiId: phoneId, displayName, publicKey, signingPublicKey,
+        });
       }
-      if (!record) throw new Error('Could not create your profile. Please try again.');
       sessionStorage.removeItem('proxitalk_continue_offline');
       location.reload();
     } catch (error) {
-      $('authStatus').textContent = error.message || 'Could not create your profile.';
+      $('authStatus').textContent = error.code === '23505'
+        ? 'That phone number is already registered to a ProxiTalk account. Use another number or contact support.'
+        : (error.message || 'Could not save your profile. Please try again.');
       button.disabled = false;
     }
   });
+  $('profileCancel').onclick = () => $('authOverlay').classList.add('hidden');
   if (!authUser && ProxiAuth.getError()) $('authStatus').textContent = ProxiAuth.getError();
   if (authUser && currentProfile) {
     try {
       const publicKey = await ProxiCrypto.ensureIdentity(authUser.id);
       if (keyAvailable && publicKey.x === currentProfile.public_key.x && publicKey.y === currentProfile.public_key.y) {
-        $('authOverlay').classList.add('hidden');
-        sessionStorage.removeItem('proxitalk_continue_offline');
+        if (ProxiIdentity.isProxiTalkId(currentProfile.proxitalk_id)) {
+          $('authOverlay').classList.add('hidden');
+          sessionStorage.removeItem('proxitalk_continue_offline');
+        } else {
+          showProfileSetup(true);
+        }
       } else {
         $('authStatus').textContent = 'This browser does not have the private key for this account. Sign-in cannot recover it; use the original device/browser.';
         $('authForm').classList.add('hidden');
@@ -231,12 +251,7 @@
       }
     } catch (error) { $('authStatus').textContent = error.message; }
   } else if (authUser) {
-    $('authForm').classList.add('hidden');
-    $('googleSignIn').classList.add('hidden');
-    document.querySelector('.auth-divider').classList.add('hidden');
-    $('continueOffline').classList.add('hidden');
-    $('profileForm').classList.remove('hidden');
-    $('authIntro').textContent = 'Choose a display name to create your ProxiTalk identity.';
+    showProfileSetup(false);
   } else if (offlineMode) {
     $('authOverlay').classList.add('hidden');
   }
@@ -250,7 +265,9 @@
       const unread = msgs.filter(m => m.from === 'them' && !m.seen && m.time > (c.lastRead || 0)).length;
       return { c, last, unread };
     }).filter(({ c }) => {
-      if (search && !c.name.toLowerCase().includes(search.toLowerCase()) && !c.id.toLowerCase().includes(search.toLowerCase())) return false;
+      if (search && !c.name.toLowerCase().includes(search.toLowerCase())
+        && !c.id.toLowerCase().includes(search.toLowerCase())
+        && !String(c.proxiId || '').includes(search.replace(/\s+/g, ''))) return false;
       if (filter === 'unread') return true; // filtered below by unread
       if (filter === 'groups') return c.isGroup;
       return true;
@@ -492,7 +509,7 @@
         if (!contact) {
           const remote = await ProxiCloud.findDirectoryByUserId(row.sender_id);
           if (!remote) continue;
-          contact = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id, publicKey: remote.public_key, signingPublicKey: remote.signing_public_key || null, name: remote.display_name, color: '#128C7E', about: 'Verified ProxiTalk contact', phone: remote.proxitalk_id };
+          contact = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id, publicKey: remote.public_key, signingPublicKey: remote.signing_public_key || null, name: remote.display_name, color: '#9A7939', about: 'Verified ProxiTalk contact', phone: remote.proxitalk_id };
           contacts.push(contact);
         }
         const list = chats[contact.id] || (chats[contact.id] = []);
@@ -530,7 +547,7 @@
             if (!remote) { keepForRetry = true; continue; }
             contact = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id,
               publicKey: remote.public_key, signingPublicKey: remote.signing_public_key || null,
-              name: remote.display_name, color: '#128C7E', about: 'Verified ProxiTalk contact', phone: remote.proxitalk_id };
+              name: remote.display_name, color: '#9A7939', about: 'Verified ProxiTalk contact', phone: remote.proxitalk_id };
             contacts.push(contact);
           } else if (!contact.signingPublicKey) {
             const remote = await ProxiCloud.findDirectoryByUserId(packet.sender_id);
@@ -659,14 +676,14 @@
     const rows = contacts.filter(c => c.proxiId).map(c => `
       <div class="contact-row" data-id="${esc(c.id)}">
         <div class="avatar" style="background:${safeColor(c.color)}">${initials(c.name)}</div>
-        <div><b>${esc(c.name)}</b><span>Verified ProxiTalk ID · ${esc(c.proxiId)}</span></div>
+        <div><b>${esc(c.name)}</b><span>ProxiTalk phone ID · ${esc(c.proxiId)}</span></div>
         <span class="sel">›</span>
       </div>`).join('');
-    openModal('New encrypted chat', `${rows || '<p class="muted">No contacts yet. Add someone using their ProxiTalk ID.</p>'}<div class="field" style="margin-top:14px"><label>Contact ProxiTalk ID</label><input id="newIdInput" maxlength="11" placeholder="PT-1A2B3C4D"><small class="muted">Looked up in the signed-in directory. Check the identity fingerprint with your contact for sensitive conversations.</small><button class="btn-primary" id="newIdGo" style="margin-top:8px">Find and add contact</button></div>`);
+    openModal('New encrypted chat', `${rows || '<p class="muted">No contacts yet. Add someone using their ProxiTalk phone ID.</p>'}<div class="field" style="margin-top:14px"><label for="newIdInput">Contact phone / ProxiTalk ID</label><input id="newIdInput" type="tel" inputmode="tel" maxlength="22" placeholder="2567xxxxxxxx"><small class="muted">Enter the Uganda mobile number they use as their ID. Confirm key fingerprints out of band for sensitive conversations.</small><button class="btn-primary" id="newIdGo" style="margin-top:8px">Find and add contact</button></div>`);
     $('modalBody').querySelectorAll('.contact-row').forEach(r => r.onclick = () => { closeModal(); openChat(r.dataset.id); });
     $('newIdGo').onclick = async () => {
-      const id = $('newIdInput').value.trim().toUpperCase();
-      if (!/^PT-[0-9A-F]{8}$/.test(id)) return toast('Enter a ProxiTalk ID in the form PT-1A2B3C4D');
+      const id = ProxiIdentity.normalizeUgandaPhone($('newIdInput').value);
+      if (!id) return toast('Enter a Uganda mobile ID like 0772 123 456 or 256772123456.');
       if (!authUser || offlineMode) return toast('Sign in to look up verified online contacts');
       try {
         const remote = await ProxiCloud.findDirectoryById(id);
@@ -674,11 +691,16 @@
         if (remote.user_id === authUser.id) return toast('That is your own ProxiTalk ID');
         let c = contacts.find(item => item.userId === remote.user_id);
         if (!c) {
-          c = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id, publicKey: remote.public_key, signingPublicKey: remote.signing_public_key || null, name: remote.display_name, color: '#128C7E', phone: remote.proxitalk_id, about: 'Verified ProxiTalk contact' };
+          c = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id, publicKey: remote.public_key, signingPublicKey: remote.signing_public_key || null, name: remote.display_name, color: '#9A7939', phone: remote.proxitalk_id, about: 'Verified ProxiTalk contact' };
           contacts.push(c); persist(); renderChatList();
-        } else if (!c.signingPublicKey && remote.signing_public_key) {
-          c.signingPublicKey = remote.signing_public_key;
-          persist(); renderChatList();
+        } else {
+          let changed = false;
+          if (c.proxiId !== remote.proxitalk_id) { c.proxiId = remote.proxitalk_id; changed = true; }
+          if (c.phone !== remote.proxitalk_id) { c.phone = remote.proxitalk_id; changed = true; }
+          if (remote.signing_public_key && JSON.stringify(c.signingPublicKey) !== JSON.stringify(remote.signing_public_key)) {
+            c.signingPublicKey = remote.signing_public_key; changed = true;
+          }
+          if (changed) { persist(); renderChatList(); }
         }
         closeModal(); openChat(c.id);
       } catch (error) { toast(error.message || 'Could not search the directory'); }
@@ -692,18 +714,23 @@
     const fingerprint = currentProfile ? await ProxiCrypto.fingerprint(currentProfile.public_key) : 'Local drafts only';
     const signingFingerprint = authUser ? await ProxiCrypto.fingerprint(ProxiCrypto.getSigningPublicKey()) : 'Not provisioned';
     openModal('Account & security', `
-      <div class="detail-row"><span>${currentProfile ? 'Your ProxiTalk ID' : 'Local draft ID · not registered'}</span><b>${esc(currentProfile?.proxitalk_id || localProfileId)}</b></div>
-      ${currentProfile ? `<div class="detail-row"><span>Encryption-key fingerprint</span><b>${esc(fingerprint)}</b></div><div class="detail-row"><span>Signing-key fingerprint</span><b>${esc(signingFingerprint)}</b></div><div class="detail-row"><span>Offline sender identity</span><b>${signingKeyConflict ? 'Key mismatch · disabled' : signingKeyAvailable ? 'Provisioned on this device' : 'Not synchronized'}</b></div><button class="btn-primary" id="copyIdBtn" style="margin:8px 0">Copy my ProxiTalk ID</button>` : ''}
+      <div class="detail-row"><span>${currentProfile ? 'Your ProxiTalk phone ID' : 'Local draft ID · not registered'}</span><b>${esc(currentProfile?.proxitalk_id || localProfileId)}</b></div>
+      ${currentProfile ? `<div class="detail-row"><span>Encryption-key fingerprint</span><b>${esc(fingerprint)}</b></div><div class="detail-row"><span>Signing-key fingerprint</span><b>${esc(signingFingerprint)}</b></div><div class="detail-row"><span>Offline sender identity</span><b>${signingKeyConflict ? 'Key mismatch · disabled' : signingKeyAvailable ? 'Provisioned on this device' : 'Not synchronized'}</b></div><button class="btn-primary" id="copyIdBtn" style="margin:8px 0">Copy my ProxiTalk ID</button><button class="mini-btn" id="changePhoneIdBtn" style="width:100%;margin:0 0 8px">Change my phone-based ID</button>` : ''}
       <div class="detail-row"><span>Account</span><b>${authUser ? esc(authUser.email || 'Signed in') : 'Not signed in'}</b></div>
       <div class="detail-row"><span>Message security</span><b>Recipient public-key encryption for online text</b></div>
       <div class="detail-row"><span>Delivery</span><b>${offlineMode || !authUser ? 'Local drafts only; not sent' : 'Internet mailbox; experimental BLE handoff if online send fails'}</b></div>
       <div class="detail-row"><span>Device storage</span><b>Private key is device-bound; no key recovery</b></div>
-      <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">Compare both key fingerprints with your contact out of band to detect directory key changes. The signing key authenticates experimental Android BLE text against the online directory. Relay is opt-in and capped at three hops; a signed receipt confirms recipient-device decryption, not that a person read the message. Physical-device behavior is not yet validated. New devices cannot decrypt old messages. Attachments, groups, SMS, call push notifications, and emergency SOS are not supported. Calls are beta and require a direct network route; do not rely on ProxiTalk for emergencies.</p>
+      <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">Your ProxiTalk ID is your phone number and is visible to signed-in directory users; avoid sharing it publicly. Phone ownership is not SMS-verified in this beta. Compare both key fingerprints with your contact out of band to detect directory key changes. The signing key authenticates experimental Android BLE text against the online directory. Relay is opt-in and capped at three hops; a signed receipt confirms recipient-device decryption, not that a person read the message. Physical-device behavior is not yet validated. New devices cannot decrypt old messages. Attachments, groups, SMS, call push notifications, and emergency SOS are not supported. Calls are beta and require a direct network route; do not rely on ProxiTalk for emergencies.</p>
       ${authUser ? '<button class="btn-primary" id="signOutBtn" style="margin-top:12px">Sign out</button>' : ''}
       <button class="btn-primary" id="wipeBtn" style="margin-top:12px;background:#3D1A20;color:#FF8A96">Clear local chat data</button>`);
     if (currentProfile) $('copyIdBtn').onclick = async () => {
       try { await navigator.clipboard.writeText(currentProfile.proxitalk_id); toast('ProxiTalk ID copied. Verify fingerprints out of band before sensitive chats.'); }
       catch (_) { toast('Your ProxiTalk ID is ' + currentProfile.proxitalk_id); }
+    };
+    if (currentProfile) $('changePhoneIdBtn').onclick = () => {
+      closeModal();
+      showProfileSetup(true, true);
+      $('authOverlay').classList.remove('hidden');
     };
     $('wipeBtn').onclick = () => { Store.setNamespace(authUser?.id || ''); localStorage.removeItem('proxitalk_' + (authUser?.id ? authUser.id + '_' : '') + 'contacts'); localStorage.removeItem('proxitalk_' + (authUser?.id ? authUser.id + '_' : '') + 'chats'); location.reload(); };
     if (authUser) $('signOutBtn').onclick = async () => { ProxiCalls.stop(); ProxiBLE.setIdentity(''); ProxiBLE.stopScan(); await ProxiAuth.signOut(); ProxiCrypto.clearMemory(); sessionStorage.removeItem('proxitalk_continue_offline'); location.reload(); };
@@ -914,11 +941,19 @@
     if (!authUser || !currentProfile || !ProxiAuth.isSignedIn()) return;
     let changed = false;
     for (const contact of contacts) {
-      if (!contact.userId || contact.signingPublicKey) continue;
+      if (!contact.userId) continue;
+      const needsRefresh = !contact.signingPublicKey || !ProxiIdentity.isProxiTalkId(contact.proxiId) || contact.proxiId !== contact.phone;
+      if (!needsRefresh) continue;
       try {
         const remote = await ProxiCloud.findDirectoryByUserId(contact.userId);
-        if (remote?.signing_public_key) { contact.signingPublicKey = remote.signing_public_key; changed = true; }
-      } catch (error) { console.warn('[ProxiTalk] contact signing-key refresh failed', error); }
+        if (remote) {
+          if (contact.proxiId !== remote.proxitalk_id) { contact.proxiId = remote.proxitalk_id; changed = true; }
+          if (contact.phone !== remote.proxitalk_id) { contact.phone = remote.proxitalk_id; changed = true; }
+          if (remote.signing_public_key && JSON.stringify(contact.signingPublicKey) !== JSON.stringify(remote.signing_public_key)) {
+            contact.signingPublicKey = remote.signing_public_key; changed = true;
+          }
+        }
+      } catch (error) { console.warn('[ProxiTalk] contact directory refresh failed', error); }
     }
     if (changed) persist();
   }

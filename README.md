@@ -1,12 +1,12 @@
 # ProxiTalk — early-access encrypted messaging
 
-ProxiTalk has **one-to-one, internet-delivered encrypted text** and a beta **voice/video calling path** for signed-in contacts. Users sign in with Google or email magic link, create a ProxiTalk ID, look up another ID, and message through an authenticated Supabase mailbox. Calls use browser WebRTC with E2E-encrypted, device-signed signaling through a short-lived Supabase mailbox; media is sent directly peer-to-peer using DTLS-SRTP.
+ProxiTalk has **one-to-one, internet-delivered encrypted text** and a beta **voice/video calling path** for signed-in contacts. Users sign in with Google or email magic link, then create a ProxiTalk ID from a Uganda mobile number (`2567xxxxxxxx`), look up another phone ID, and message through an authenticated Supabase mailbox. Phone ownership is not SMS-verified in this beta. Calls use browser WebRTC with E2E-encrypted, device-signed signaling through a short-lived Supabase mailbox; media is sent directly peer-to-peer using DTLS-SRTP.
 
 This is an early-access implementation, **not yet production-ready**. Calls are beta and have not been validated between two physical Android devices or across real mobile networks. The complete two-account acceptance matrix, independent cryptographic/security review, TURN relay, and production operations review remain incomplete. Do not use it for emergencies or high-risk communication.
 
 ## Current scope
 
-- Google OAuth (PKCE) and email magic-link sign-in, plus a public ProxiTalk ID directory. Google sign-in is enabled in the configured Supabase project.
+- Google OAuth (PKCE) and email magic-link sign-in, followed by required Uganda mobile-number onboarding. The normalized phone (`2567xxxxxxxx`) is the ProxiTalk ID and is visible to signed-in directory users; ownership verification by SMS is not configured. Google sign-in is enabled in the configured Supabase project.
 - One-to-one text messages over the internet. Browser Web Crypto uses ephemeral P-256 ECDH, HKDF-SHA-256, and AES-256-GCM; the server receives an encrypted envelope.
 - Beta one-to-one audio/video calls between saved contacts. Call SDP/ICE signaling is recipient-key encrypted and device-signed; audio/video uses direct WebRTC DTLS-SRTP. Both people must be signed in, online, and have the app open. Incoming calls are polled in the foreground, not delivered by push. Only a public STUN server is configured—there is no TURN relay—so some carriers, NATs, or firewalls will prevent connection. Calls have not completed physical-device/network acceptance testing.
 - Recipient polling and authenticated row-level security for directory and mailbox records. Messages expire from the pending query after 14 days; expired-row cleanup/retention automation is not yet configured.
@@ -21,7 +21,7 @@ This is an early-access implementation, **not yet production-ready**. Calls are 
 - Account/device key recovery, multi-device history, key rotation, and automatic identity verification. A new browser/device cannot decrypt messages for an existing device key.
 - Abuse reporting/moderation, rate limits for message creation, support, observability, backups/retention operations, or a reviewed incident-response process.
 
-Compare a contact's key fingerprint out of band before relying on identity. The service can expose directory metadata (ProxiTalk IDs, display names, public keys, sender/recipient IDs, and message timing). Browser compromise, malicious updates, or a compromised endpoint can expose message contents. This code has not had an independent security audit.
+Compare a contact's key fingerprint out of band before relying on identity. The service can expose directory metadata (phone-based ProxiTalk IDs, display names, public keys, sender/recipient IDs, and message timing). Because the ID is a phone number, it is personal information visible to signed-in directory users. Browser compromise, malicious updates, or a compromised endpoint can expose message contents. This code has not had an independent security audit.
 
 ## Run locally
 
@@ -40,7 +40,7 @@ Open `http://localhost:8000`. Use `npm run dev` for the root site. `dist/` is th
 - Supabase project `oxmxffftlpbpbydphhpv` (`ProxiTalk`) is the configured backend. The authenticated directory/mailbox, nullable signing-key, and encrypted call-signaling schema migrations are applied there and tracked under `supabase/migrations/`. The prior project was not data-migrated; existing accounts, mailbox rows, and device-bound keys remain on their original backend.
 - Supabase Auth's site URL and redirect allow-list include the current GitHub Pages URL and Android callback URI. Email confirmation remains enabled. Configure and verify a production SMTP sender before inviting general users; the default Supabase mailer is not an appropriate production mail-delivery setup.
 - Google sign-in is enabled in the Supabase provider for the configured project. Its Google Cloud OAuth authorized redirect URI is `https://oxmxffftlpbpbydphhpv.supabase.co/auth/v1/callback`. Supabase Auth allows `https://charlielwanga.github.io/ProxiTalk/`, `http://localhost:8000/**`, and `com.proxitalk.app://auth/callback`. Review the Google provider's nonce-check setting and keep nonce validation enabled for production.
-- The gold-and-black ProxiTalk icon is included in Android launcher resources and web/PWA assets. The current test package is version `1.2.0-beta1` (versionCode 3); CI publishes `proxitalk-android-v1.2.0-beta1` for 30 days. It is a debug APK, not a release-signed build. Android only allows in-place updates with the same signing certificate; this CI workflow does not yet use a durable release keystore. Do not uninstall or clear app data to apply a test APK unless signer compatibility and device-key preservation are verified.
+- The gold-and-black ProxiTalk icon and black-and-gold UI theme are included in Android launcher resources and web/PWA assets. The current test package is version `1.2.0-beta2` (versionCode 4); CI publishes `proxitalk-android-v1.2.0-beta2` for 30 days. It is a debug APK, not a release-signed build. Android only allows in-place updates with the same signing certificate; this CI workflow does not yet use a durable release keystore. Do not uninstall or clear app data to apply a test APK unless signer compatibility and device-key preservation are verified.
 
 ## Verification and release gates
 

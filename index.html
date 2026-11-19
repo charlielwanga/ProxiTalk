@@ -4,12 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>ProxiTalk — Encrypted Online Messaging</title>
-<meta name="description" content="ProxiTalk encrypted online messaging. Sign in with Google or email and share your ProxiTalk ID to chat.">
-<meta name="theme-color" content="#0B3D3A">
+<meta name="description" content="ProxiTalk encrypted messaging with black-and-gold design. Sign in and use your Uganda mobile number as your ProxiTalk ID.">
+<meta name="theme-color" content="#080807">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://oxmxffftlpbpbydphhpv.supabase.co wss://oxmxffftlpbpbydphhpv.supabase.co stun:; media-src 'self' blob:; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="assets/proxitalk-app-icon.png">
 <link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/theme-overrides.css">
 </head>
 <body>
 
@@ -17,7 +18,7 @@
   <section class="auth-card">
     <div class="auth-mark"><img src="assets/proxitalk-app-icon.png" alt=""></div>
     <h1 id="authTitle">Welcome to ProxiTalk</h1>
-    <p id="authIntro">Sign in with Google or your email to create an encrypted messaging identity.</p>
+    <p id="authIntro">Sign in with Google or email, then add your Uganda mobile number to create a phone-based ProxiTalk ID.</p>
     <form id="authForm">
       <label for="authEmail">Email address</label>
       <input id="authEmail" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com">
@@ -30,7 +31,11 @@
     <form id="profileForm" class="hidden">
       <label for="profileName">Your display name</label>
       <input id="profileName" type="text" autocomplete="name" required maxlength="48" placeholder="Name people will recognize">
-      <button class="btn-primary" type="submit">Create my ProxiTalk ID</button>
+      <label for="profilePhone">Uganda mobile number</label>
+      <input id="profilePhone" type="tel" inputmode="tel" autocomplete="tel" required maxlength="22" placeholder="07xx xxx xxx or +2567xx xxx xxx" aria-describedby="profilePhoneHelp">
+      <small id="profilePhoneHelp" class="auth-help">Your ProxiTalk ID will be this number in international format: 2567xxxxxxxx. Your ID is visible to signed-in directory users. Phone ownership is not SMS-verified in this beta.</small>
+      <button class="btn-primary" id="profileSubmit" type="submit">Create my ProxiTalk ID</button>
+      <button class="auth-google hidden" id="profileCancel" type="button">Cancel phone ID change</button>
     </form>
     <p class="auth-footnote">Messages sent online are encrypted for the recipient. This browser profile stays signed in until you sign out or clear browser data. Your device key stays on this device; keep access to this browser profile because key recovery and offline Bluetooth relaying are still being developed.</p>
   </section>
@@ -110,7 +115,7 @@
           <div>📦 Outgoing drafts stay local if the network is unavailable</div>
           <div>📡 Android BLE relay is opt-in and capped at three hops; receipts confirm device decryption, not reading</div>
         </div>
-        <p class="empty-hint">Sign in, then start a chat with a verified ProxiTalk ID.</p>
+        <p class="empty-hint">Sign in, then start a chat with a contact's Uganda mobile ProxiTalk ID.</p>
       </div>
     </div>
 
@@ -242,6 +247,7 @@
 <script src="js/ble.js"></script>
 <script src="js/mesh.js"></script>
 <script src="js/calls.js"></script>
+<script src="js/identity.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
