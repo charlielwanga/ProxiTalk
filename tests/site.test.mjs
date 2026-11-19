@@ -66,12 +66,18 @@ test('BLE bridge wrapper only exposes native packet APIs when the Android bridge
       getBleStatus: () => JSON.stringify({ available: true, running: true, connectedPeerCount: 1 }),
       startBleDiscovery: () => JSON.stringify({ ok: true }),
       stopBleDiscovery: () => JSON.stringify({ ok: true }),
+      setBleIdentity: value => { globalThis.identity = value; },
+      setBleRelayEnabled: value => JSON.stringify({ ok: true, relayEnabled: value }),
+      acknowledgeBlePacket: value => JSON.stringify({ ok: value === 'received' }),
       sendBlePacket: value => { sent.push(JSON.parse(value)); return JSON.stringify({ ok: true, connectedPeerCount: 1 }); },
       drainBlePackets: () => JSON.stringify([{ v: 1, id: 'received' }]),
     } }, JSON,
   });
   assert.equal(ble.detect(), 'native-discovery');
   assert.equal(ble.getStatus().connectedPeerCount, 1);
+  assert.equal(ble.setIdentity('user-id'), true);
+  assert.equal(ble.setRelayEnabled(true).relayEnabled, true);
+  assert.equal(ble.acknowledgePacket('received').ok, true);
   assert.equal(ble.sendPacket(packet).ok, true);
   assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), packet);
   assert.equal(ble.drainPackets()[0].id, 'received');
@@ -98,6 +104,7 @@ test('recipient-only encryption and device-local history encryption round-trip',
   assert.equal(await alice.verifyPayload(signingPublic, { ...signedPayload, recipient: 'mallory' }, signature), false);
   const blePacket = await alice.signPacket({ v: 1, id: 'packet-id', sender_id: 'alice-test', recipient_id: 'bob-test', ciphertext: { ct: 'opaque' } });
   assert.equal(await alice.verifyPacket(blePacket, signingPublic), true);
+  assert.equal(await alice.verifyPacket({ ...blePacket, route_hops: 3 }, signingPublic), true);
   assert.equal(await alice.verifyPacket({ ...blePacket, recipient_id: 'mallory' }, signingPublic), false);
   assert.equal(await bob.verifyPacket(blePacket, bobPublic), false);
   assert.ok(alicePublic.x && bobPublic.x && signingPublic.x);
@@ -308,7 +315,18 @@ test('Android BLE GATT carrier only accepts bounded recipient-key-encrypted pack
   assert.match(service, /MAX_PACKET_BYTES = 16 \* 1024/);
   assert.match(service, /FRAME_HEADER_BYTES = 8/);
   assert.match(service, /ECDH-P256\/HKDF-SHA256\/AES-256-GCM/);
-  assert.match(service, /Arrays\.asList\("v", "id", "sender_id", "recipient_id", "created_at", "expires_at", "hops", "ciphertext", "sender_signing_key", "signature"\)/);
+  assert.match(service, /route_hops/);
+  assert.match(service, /packetStore\.putPacket\(packet, false, address\)/);
+  assert.match(service, /packetStore\.pendingForPeer/);
+  assert.match(service, /relayEnabled/);
+  assert.match(service, /MAX_RELAY_HOPS/);
+  const store = await read('android/app/src/main/java/com/proxitalk/app/BlePacketStore.java');
+  assert.match(store, /MAX_PACKETS = 256/);
+  assert.match(store, /MAX_BYTES = 4L \* 1024L \* 1024L/);
+  assert.match(store, /MAX_FORWARD_RECORDS = 2_048/);
+  assert.match(store, /CREATE TABLE packets/);
+  assert.match(store, /leaseRecipientPackets/);
+  assert.match(store, /p\.route_hops<\?/);
   assert.match(service, /senderSigningKey/);
   assert.match(ble, /sendPacket/);
   assert.match(service, /Arrays\.asList\("kty", "crv", "x", "y", "ext", "key_ops"\)/);
@@ -318,14 +336,22 @@ test('Android BLE GATT carrier only accepts bounded recipient-key-encrypted pack
   assert.match(activity, /drainBlePackets\(\)/);
   assert.match(ble, /sendBlePacket/);
   assert.match(ble, /drainBlePackets/);
-  assert.match(html, /ECDSA sender verification against the online directory/);
-  assert.match(html, /not proof of receipt/);
+  assert.match(html, /signed, recipient-encrypted packet path/);
+  assert.match(html, /3-hop cap/);
+  assert.match(html, /signed recipient-decryption acknowledgements/);
   const app = await read('js/app.js');
   assert.match(app, /ProxiCrypto\.signPacket/);
   assert.match(app, /ProxiCrypto\.verifyPacket/);
   assert.match(app, /ProxiCrypto\.decryptFromMe\(packet\.ciphertext\)/);
   assert.match(app, /ble_queued/);
-  assert.doesNotMatch(service, /Store-and-forward is implemented/);
+  assert.match(app, /delivered_ack/);
+  assert.match(app, /sendBleAcknowledgement/);
+  assert.match(app, /ble_delivered/);
+  assert.match(app, /expectedRecipient === packet\.sender_id/);
+  assert.match(service, /packetStore\.markForwarded/);
+  assert.match(service, /setRelayEnabled/);
+  assert.match(activity, /setBleRelayEnabled/);
+  assert.match(activity, /acknowledgeBlePacket/);
 });
 
 test('Android 13 app shell uses a secure asset origin and a narrow PKCE deep link', async () => {

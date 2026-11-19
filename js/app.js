@@ -5,6 +5,7 @@
   'use strict';
 
   let authUser = await ProxiAuth.initialize();
+  ProxiBLE.setIdentity(authUser?.id || '');
   Store.setNamespace(authUser?.id || '');
   let currentProfile = null;
   let offlineMode = !authUser && sessionStorage.getItem('proxitalk_continue_offline') === '1';
@@ -313,7 +314,7 @@
       const replyHtml = m.replyTo ? `<div class="reply-quote"><b>${esc(m.replyTo.sender || 'You')}</b><span>${esc(m.replyTo.text || '')}</span></div>` : '';
       const reaction = m.reaction ? `<span class="reaction">${esc(m.reaction)}</span>` : '';
       const sosCls = m.isSOS ? ' sos-bubble' : '';
-      const statusChip = m.status === 'local' ? '<span class="status-chip">Saved here · not sent</span>' : (m.status === 'failed' ? '<span class="status-chip">Delivery not confirmed · saved here</span>' : (m.status === 'sent' ? '<span class="status-chip">Encrypted · server queued</span>' : (m.status === 'ble_queued' ? '<span class="status-chip">Signed · handed to BLE · receipt unconfirmed</span>' : (m.signerVerified ? '<span class="status-chip">BLE signature verified</span>' : ''))));
+      const statusChip = m.status === 'local' ? '<span class="status-chip">Saved here · not sent</span>' : (m.status === 'failed' ? '<span class="status-chip">Delivery not confirmed · saved here</span>' : (m.status === 'sent' ? '<span class="status-chip">Encrypted · server queued</span>' : (m.status === 'ble_queued' ? '<span class="status-chip">Signed · queued for BLE · receipt unconfirmed</span>' : (m.status === 'ble_delivered' ? '<span class="status-chip">Recipient device confirmed · not read</span>' : (m.signerVerified ? '<span class="status-chip">BLE signature verified</span>' : '')))));
       html += `
         <div class="msg-row ${isMe ? 'me' : 'them'}">
           <div class="bubble${sosCls}" data-mid="${esc(m.id)}">
@@ -388,7 +389,7 @@
     const c = contactById(activeChat);
     const msgs = chats[activeChat] || [];
     const last = msgs[msgs.length - 1];
-    $('chatStatus').textContent = offlineMode ? 'Local drafts only · not sent' : (last?.status === 'local' ? 'Saved on this device · not sent' : (last?.status === 'failed' ? 'Delivery not confirmed · message saved locally' : (last?.status === 'ble_queued' ? 'Signed and handed to nearby BLE · receipt unconfirmed' : (c?.proxiId ? 'Encrypted online messaging' : 'Choose a verified ProxiTalk ID'))));
+    $('chatStatus').textContent = offlineMode ? 'Local drafts only · not sent' : (last?.status === 'local' ? 'Saved on this device · not sent' : (last?.status === 'failed' ? 'Delivery not confirmed · message saved locally' : (last?.status === 'ble_queued' ? 'Signed, queued for nearby devices · receipt unconfirmed' : (last?.status === 'ble_delivered' ? 'Recipient device confirmed · not read' : (c?.proxiId ? 'Encrypted online messaging' : 'Choose a verified ProxiTalk ID')))));
     $('hopBadge').textContent = last?.status === 'sent' ? 'server queued' : (last?.status === 'ble_queued' ? 'BLE handoff' : 'no mesh');
   }
 
@@ -408,8 +409,21 @@
       ciphertext: await ProxiCrypto.encryptFor(contact.publicKey, JSON.stringify({ type: 'text', text })),
     });
     const result = ProxiBLE.sendPacket(packet);
-    if (!result?.ok) throw new Error(result?.error || 'Nearby BLE carrier did not accept the packet');
+    if (!result?.ok) throw new Error(result?.error || 'Nearby BLE carrier could not store the encrypted packet');
     return packet.id;
+  }
+
+  async function sendBleAcknowledgement(contact, originalPacketId) {
+    if (!authUser || !signingKeyAvailable || !contact?.userId || !contact?.publicKey) return false;
+    const createdAt = Date.now();
+    const packet = await ProxiCrypto.signPacket({
+      v: 1, id: crypto.randomUUID(), sender_id: authUser.id, recipient_id: contact.userId,
+      created_at: createdAt, expires_at: createdAt + 24 * 60 * 60 * 1000, hops: 0,
+      ciphertext: await ProxiCrypto.encryptFor(contact.publicKey,
+        JSON.stringify({ type: 'delivered_ack', packet_id: originalPacketId })),
+    });
+    const result = ProxiBLE.sendPacket(packet);
+    return !!result?.ok;
   }
 
   // ── Send message ───────────────────────────────────────────
@@ -419,7 +433,7 @@
     if (!c) return;
     const msg = {
       id: 'm_' + crypto.randomUUID(),
-      from: 'me', toName: c.id, text,
+      from: 'me', toName: c.id, recipientUserId: c.userId || null, text,
       type: opts.type || 'text',
       dataUrl: opts.dataUrl || null,
       fileName: opts.fileName || null, fileSize: opts.fileSize || null,
@@ -458,7 +472,7 @@
         if (packetId) {
           msg.status = 'ble_queued'; msg.encrypted = true; msg.blePacketId = packetId; msg.signerVerified = true;
           persist(); renderMessages(); renderChatList(); updateChatStatus();
-          toast('Signed, encrypted message handed to nearby BLE. Recipient receipt is not confirmed.');
+          toast('Encrypted message stored in the nearby queue. Recipient decryption is not confirmed.');
           return;
         }
       } catch (bleError) { console.warn('[ProxiTalk] signed BLE handoff failed', bleError); }
@@ -498,17 +512,22 @@
     blePollRunning = true;
     try {
       for (const packet of ProxiBLE.drainPackets()) {
+        if (!packet || typeof packet.id !== 'string') continue;
+        let keepForRetry = false;
         try {
           const now = Date.now();
-          if (!packet || packet.v !== 1 || packet.recipient_id !== authUser.id
+          const routeHops = packet.route_hops ?? 0;
+          if (packet.v !== 1 || packet.recipient_id !== authUser.id
             || !Number.isFinite(packet.created_at) || !Number.isFinite(packet.expires_at)
             || packet.created_at > now + 60_000 || packet.expires_at <= now
             || packet.expires_at <= packet.created_at || packet.expires_at > packet.created_at + 14 * 24 * 60 * 60 * 1000
-            || packet.hops !== 0 || typeof packet.id !== 'string') continue;
+            || packet.hops !== 0 || !Number.isInteger(routeHops) || routeHops < 0 || routeHops > 3) {
+            ProxiBLE.acknowledgePacket(packet.id); continue;
+          }
           let contact = contacts.find(item => item.userId === packet.sender_id);
           if (!contact) {
             const remote = await ProxiCloud.findDirectoryByUserId(packet.sender_id);
-            if (!remote) continue;
+            if (!remote) { keepForRetry = true; continue; }
             contact = { id: remote.proxitalk_id, proxiId: remote.proxitalk_id, userId: remote.user_id,
               publicKey: remote.public_key, signingPublicKey: remote.signing_public_key || null,
               name: remote.display_name, color: '#128C7E', about: 'Verified ProxiTalk contact', phone: remote.proxitalk_id };
@@ -517,17 +536,51 @@
             const remote = await ProxiCloud.findDirectoryByUserId(packet.sender_id);
             if (remote) contact.signingPublicKey = remote.signing_public_key || null;
           }
-          if (!contact.signingPublicKey || !await ProxiCrypto.verifyPacket(packet, contact.signingPublicKey)) continue;
+          if (!contact.signingPublicKey) { keepForRetry = true; continue; }
+          if (!await ProxiCrypto.verifyPacket(packet, contact.signingPublicKey)) {
+            ProxiBLE.acknowledgePacket(packet.id); continue;
+          }
           const decoded = JSON.parse(await ProxiCrypto.decryptFromMe(packet.ciphertext));
-          if (!decoded || decoded.type !== 'text' || typeof decoded.text !== 'string' || decoded.text.length > 5000) continue;
+          if (decoded?.type === 'delivered_ack') {
+            if (typeof decoded.packet_id === 'string' && decoded.packet_id.length <= 80) {
+              let changed = false;
+              for (const [chatId, list] of Object.entries(chats)) {
+                const sent = list.find(message => message.blePacketId === decoded.packet_id && message.from === 'me');
+                const expectedRecipient = sent?.recipientUserId || contactById(chatId)?.userId;
+                if (sent && expectedRecipient === packet.sender_id && sent.status === 'ble_queued') {
+                  sent.status = 'ble_delivered'; sent.bleHops = routeHops; changed = true;
+                }
+              }
+              if (changed) { persist(); renderChatList(); if (activeChat) renderMessages(); updateChatStatus(); }
+              ProxiBLE.acknowledgePacket(packet.id);
+            } else ProxiBLE.acknowledgePacket(packet.id);
+            continue;
+          }
+          if (!decoded || decoded.type !== 'text' || typeof decoded.text !== 'string' || decoded.text.length > 4096) {
+            ProxiBLE.acknowledgePacket(packet.id); continue;
+          }
           const list = chats[contact.id] || (chats[contact.id] = []);
-          if (list.some(message => message.blePacketId === packet.id || message.cloudId === packet.id)) continue;
-          list.push({ id: packet.id, blePacketId: packet.id, from: 'them', sender: contact.name,
-            text: decoded.text, type: 'text', time: packet.created_at, status: 'received',
-            encrypted: true, signerVerified: true, hops: 0 });
-          if (!activeChat || activeChat !== contact.id) contact.lastRead = 0;
-          persist(); renderChatList(); if (activeChat) renderMessages();
-        } catch (error) { console.warn('[ProxiTalk] ignored an invalid BLE packet', error); }
+          const duplicate = list.some(message => message.blePacketId === packet.id || message.cloudId === packet.id);
+          if (!duplicate) {
+            list.push({ id: packet.id, blePacketId: packet.id, from: 'them', sender: contact.name,
+              text: decoded.text, type: 'text', time: packet.created_at, status: 'received',
+              encrypted: true, signerVerified: true, hops: routeHops });
+            if (!activeChat || activeChat !== contact.id) contact.lastRead = 0;
+            persist(); renderChatList(); if (activeChat) renderMessages();
+          }
+          // Receipt means authenticated recipient decryption, not that the person read it.
+          const queuedReceipt = await sendBleAcknowledgement(contact, packet.id).catch(error => {
+            console.warn('[ProxiTalk] could not queue BLE delivery receipt', error); return false;
+          });
+          if (queuedReceipt) {
+            ProxiBLE.acknowledgePacket(packet.id);
+            if (!duplicate) toast(`Encrypted nearby message received via ${routeHops} relay hop${routeHops === 1 ? '' : 's'}.`);
+          } else keepForRetry = true;
+        } catch (error) {
+          console.warn('[ProxiTalk] ignored an invalid BLE packet', error);
+          ProxiBLE.acknowledgePacket(packet.id);
+        }
+        if (keepForRetry) continue;
       }
     } finally { blePollRunning = false; }
   }
@@ -645,7 +698,7 @@
       <div class="detail-row"><span>Message security</span><b>Recipient public-key encryption for online text</b></div>
       <div class="detail-row"><span>Delivery</span><b>${offlineMode || !authUser ? 'Local drafts only; not sent' : 'Internet mailbox; experimental BLE handoff if online send fails'}</b></div>
       <div class="detail-row"><span>Device storage</span><b>Private key is device-bound; no key recovery</b></div>
-      <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">Compare both key fingerprints with your contact out of band to detect directory key changes. The signing key authenticates experimental one-hop Android BLE text against the online directory. This path is not physically validated and does not confirm receipt or relay messages. New devices cannot decrypt old messages. Attachments, groups, SMS, call push notifications, and emergency SOS are not supported. Calls are beta and require a direct network route; do not rely on ProxiTalk for emergencies.</p>
+      <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">Compare both key fingerprints with your contact out of band to detect directory key changes. The signing key authenticates experimental Android BLE text against the online directory. Relay is opt-in and capped at three hops; a signed receipt confirms recipient-device decryption, not that a person read the message. Physical-device behavior is not yet validated. New devices cannot decrypt old messages. Attachments, groups, SMS, call push notifications, and emergency SOS are not supported. Calls are beta and require a direct network route; do not rely on ProxiTalk for emergencies.</p>
       ${authUser ? '<button class="btn-primary" id="signOutBtn" style="margin-top:12px">Sign out</button>' : ''}
       <button class="btn-primary" id="wipeBtn" style="margin-top:12px;background:#3D1A20;color:#FF8A96">Clear local chat data</button>`);
     if (currentProfile) $('copyIdBtn').onclick = async () => {
@@ -653,7 +706,7 @@
       catch (_) { toast('Your ProxiTalk ID is ' + currentProfile.proxitalk_id); }
     };
     $('wipeBtn').onclick = () => { Store.setNamespace(authUser?.id || ''); localStorage.removeItem('proxitalk_' + (authUser?.id ? authUser.id + '_' : '') + 'contacts'); localStorage.removeItem('proxitalk_' + (authUser?.id ? authUser.id + '_' : '') + 'chats'); location.reload(); };
-    if (authUser) $('signOutBtn').onclick = async () => { ProxiCalls.stop(); await ProxiAuth.signOut(); ProxiCrypto.clearMemory(); sessionStorage.removeItem('proxitalk_continue_offline'); location.reload(); };
+    if (authUser) $('signOutBtn').onclick = async () => { ProxiCalls.stop(); ProxiBLE.setIdentity(''); ProxiBLE.stopScan(); await ProxiAuth.signOut(); ProxiCrypto.clearMemory(); sessionStorage.removeItem('proxitalk_continue_offline'); location.reload(); };
   };
 
   // ── Chat info (hop path) ───────────────────────────────────
@@ -800,31 +853,43 @@
   // Voice-message transport is not implemented in this preview.
   $('micBtn').onclick = () => toast('Voice messages are not available until message transport is implemented.');
 
-  // Internet, relay, SOS, and transport toggles are intentionally absent here;
-  // this build does not simulate connectivity or claim message delivery.
-
   // ── Panel / search / filters / back ────────────────────────
   function refreshBleUI() {
     const native = ProxiBLE.detect() === 'native-discovery';
     const status = ProxiBLE.getStatus();
     const start = $('bleStartBtn'), stop = $('bleStopBtn'), label = $('bleStatus');
+    const relayStart = $('bleRelayStartBtn'), relayStop = $('bleRelayStopBtn');
     start.disabled = !native;
     start.classList.toggle('hidden', !!status.running);
     stop.classList.toggle('hidden', !status.running);
-    if (!native) label.textContent = 'Native BLE discovery is available only in the Android app.';
+    relayStart.classList.toggle('hidden', !native || !status.running || !!status.relayEnabled);
+    relayStop.classList.toggle('hidden', !native || !status.running || !status.relayEnabled);
+    if (!native) label.textContent = 'Native BLE transport is available only in the Android app.';
     else if (status.error) label.textContent = status.error;
-    else if (status.running) label.textContent = `BLE on · ${status.peerCount || 0} nearby · ${status.connectedPeerCount || 0} connected. Signed one-hop text is experimental; receipt is unconfirmed.`;
-    else label.textContent = 'BLE is off. Turn it on only while you want nearby devices detected.';
+    else if (status.running) label.textContent = `Nearby BLE on · ${status.peerCount || 0} nearby · ${status.connectedPeerCount || 0} connected · ${status.queuedPacketCount || 0} stored packets · relay ${status.relayEnabled ? 'ON (3-hop cap)' : 'off'}. A recipient receipt means decrypted, not read.`;
+    else label.textContent = 'Nearby BLE is off. Stored packets remain encrypted on this device until expiry.';
   }
   $('bleStartBtn').onclick = async () => {
     const result = await ProxiBLE.startScan();
-    if (!result.ok) toast(result.error || 'Could not start BLE discovery');
-    else toast('Nearby discovery starting. Approve Android Bluetooth permissions if asked.');
+    if (!result.ok) return toast(result.error || 'Could not start BLE discovery');
+    toast('Nearby transport starting. Approve Android Bluetooth permissions if asked.');
     refreshBleUI();
   };
   $('bleStopBtn').onclick = () => {
     ProxiBLE.stopScan();
-    toast('Nearby discovery stopped');
+    toast('Nearby transport stopped; encrypted queued packets remain stored until expiry.');
+    refreshBleUI();
+  };
+  $('bleRelayStartBtn').onclick = () => {
+    const result = ProxiBLE.setRelayEnabled(true);
+    if (!result.ok) return toast(result.error || 'Could not enable encrypted relay');
+    toast('Encrypted relay enabled: this device may forward opaque packets up to 3 hops.');
+    refreshBleUI();
+  };
+  $('bleRelayStopBtn').onclick = () => {
+    const result = ProxiBLE.setRelayEnabled(false);
+    if (!result.ok) return toast(result.error || 'Could not disable relay');
+    toast('Relay disabled. This device will still send and receive its own packets.');
     refreshBleUI();
   };
   window.addEventListener('proxitalk-ble-error', event => {

@@ -103,12 +103,12 @@
       <div class="empty-hero">
         <div class="empty-icon">📡</div>
         <h2>ProxiTalk</h2>
-        <p>Secure one-to-one online messaging is available. Android has an experimental signed one-hop Bluetooth text path; multi-hop relaying remains in development.</p>
+        <p>Secure one-to-one online messaging is available. Android has an experimental signed, recipient-encrypted BLE path with bounded storage, opt-in relay, and device-decryption receipts. Physical-device behavior is not yet validated.</p>
         <div class="empty-features">
           <div>🔐 Recipient-key encrypted online messages</div>
           <div>🪪 Sign in and share your ProxiTalk ID with a contact</div>
           <div>📦 Outgoing drafts stay local if the network is unavailable</div>
-          <div>📡 Android one-hop BLE is experimental; multi-hop delivery is not ready</div>
+          <div>📡 Android BLE relay is opt-in and capped at three hops; receipts confirm device decryption, not reading</div>
         </div>
         <p class="empty-hint">Sign in, then start a chat with a verified ProxiTalk ID.</p>
       </div>
@@ -164,7 +164,9 @@
       <p id="bleStatus" class="muted" role="status" aria-live="polite">Native BLE is available only in the Android app.</p>
       <button class="btn-primary" id="bleStartBtn" type="button">Enable nearby BLE</button>
       <button class="btn-primary hidden" id="bleStopBtn" type="button">Stop nearby BLE</button>
-      <p class="muted">Android supports experimental one-hop, recipient-encrypted BLE text packets with ECDSA sender verification against the online directory. When online mailbox delivery fails, an enabled nearby carrier may accept a signed packet; this is only a handoff, not proof of receipt. Discovery stays on only while you enable it. Relay/store-and-forward and delivery receipts are not implemented, and physical-device testing is still required.</p>
+      <button class="btn-primary hidden" id="bleRelayStartBtn" type="button">Opt in to encrypted relay (max 3 hops)</button>
+      <button class="btn-primary hidden" id="bleRelayStopBtn" type="button">Turn off packet relay</button>
+      <p class="muted">Android can persist opaque recipient-encrypted packets on this device and optionally relay them up to 3 hops. Relay is off until you opt in; storage is bounded, packets expire, and relays never decrypt message content. A signed recipient receipt confirms decryption on the recipient device, not that the person read it. This remains experimental and needs physical multi-device testing; never rely on it for emergencies.</p>
     </div>
 
     <div class="panel-section">
@@ -196,7 +198,7 @@
 
     <div class="panel-section">
       <h4>Transport status</h4>
-      <p class="muted">The Web build has no Bluetooth transport. Android has an opt-in experimental authenticated one-hop text path; it requires directory-published signing keys. It does not relay or confirm delivery, and has not yet been validated between physical devices.</p>
+      <p class="muted">The Web build has no Bluetooth transport. Android supports a beta signed, recipient-encrypted packet path with an optional relay (off by default), bounded encrypted disk queue, 3-hop cap, and signed recipient-decryption acknowledgements. Relay nodes see routing metadata, never plaintext. Multi-device delivery, battery behavior, and expiry still need physical testing.</p>
     </div>
   </aside>
 </div>

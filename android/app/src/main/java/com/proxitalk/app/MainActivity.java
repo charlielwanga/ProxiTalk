@@ -294,6 +294,15 @@ public class MainActivity extends Activity {
         public String getBleStatus() { return BleMeshService.snapshotJson(); }
 
         @JavascriptInterface
+        public void setBleIdentity(String userId) { BleMeshService.setLocalIdentity(userId); }
+
+        @JavascriptInterface
+        public String setBleRelayEnabled(boolean enabled) { return BleMeshService.setRelayEnabled(enabled); }
+
+        @JavascriptInterface
+        public String acknowledgeBlePacket(String packetId) { return BleMeshService.acknowledgePacket(packetId); }
+
+        @JavascriptInterface
         public String startBleDiscovery() {
             runOnUiThread(() -> requestOrStartMesh());
             return "{\"ok\":true,\"state\":\"starting\"}";

@@ -43,15 +43,13 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Opt-in BLE packet-carrier prototype. It does not route, persist, or acknowledge messages. */
+/** Explicitly opt-in BLE transport with bounded opaque packet persistence and relay. */
 public final class BleMeshService extends Service {
     public static final UUID SERVICE_UUID = UUID.fromString("7dd9a5d0-62a5-4a17-9e16-5f50b331a101");
     public static final UUID PACKET_CHARACTERISTIC_UUID = UUID.fromString("7dd9a5d1-62a5-4a17-9e16-5f50b331a101");
@@ -59,7 +57,6 @@ public final class BleMeshService extends Service {
     private static final String CHANNEL_ID = "proxitalk_nearby";
     private static final int NOTIFICATION_ID = 4107;
     private static final int MAX_PACKET_BYTES = 16 * 1024;
-    private static final int MAX_INBOUND_PACKETS = 64;
     private static final int MAX_SEEN_PACKETS = 256;
     private static final int MAX_PEERS = 3;
     private static final int MAX_PENDING_PER_PEER = 16;
@@ -70,16 +67,17 @@ public final class BleMeshService extends Service {
 
     private static final Map<String, Long> PEERS = new HashMap<>();
     private static final Map<String, Long> SERVER_PEERS = new HashMap<>();
-    private static final ArrayDeque<String> INBOUND_PACKETS = new ArrayDeque<>();
-    private static final LinkedHashSet<String> INBOUND_IDS = new LinkedHashSet<>();
     private static final AtomicInteger NEXT_TRANSFER_ID = new AtomicInteger(1);
     private static volatile BleMeshService instance;
     private static volatile boolean running = false;
     private static volatile boolean scanning = false;
     private static volatile boolean advertising = false;
     private static volatile String error = "";
+    private static volatile String localUserId = "";
+    private static volatile boolean relayEnabled = false;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private BlePacketStore packetStore;
     private final Map<String, Connection> connections = new HashMap<>();
     private final Map<String, String> connecting = new HashMap<>();
     private final Map<String, Assembly> assemblies = new HashMap<>();
@@ -101,6 +99,7 @@ public final class BleMeshService extends Service {
             synchronized (PEERS) { PEERS.entrySet().removeIf(entry -> entry.getValue() < cutoff); }
             synchronized (SERVER_PEERS) { SERVER_PEERS.entrySet().removeIf(entry -> entry.getValue() < cutoff); }
             synchronized (assemblies) { assemblies.entrySet().removeIf(entry -> System.currentTimeMillis() - entry.getValue().createdAt > PEER_TIMEOUT_MS); }
+            if (packetStore != null) packetStore.prune();
             if (running) handler.postDelayed(this, 5_000L);
         }
     };
@@ -119,7 +118,7 @@ public final class BleMeshService extends Service {
         final BluetoothGatt gatt;
         final String address;
         final ArrayDeque<String> queue = new ArrayDeque<>();
-        final Set<String> sentIds = new HashSet<>();
+        final LinkedHashSet<String> sentIds = new LinkedHashSet<>();
         BluetoothGattCharacteristic characteristic;
         int mtu = 23;
         byte[][] frames;
@@ -132,6 +131,8 @@ public final class BleMeshService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         instance = this;
+        packetStore = new BlePacketStore(this);
+        relayEnabled = getSharedPreferences("proxitalk_mesh", MODE_PRIVATE).getBoolean("relay_enabled", false);
         createNotificationChannel();
     }
 
@@ -316,7 +317,7 @@ public final class BleMeshService extends Service {
                     fail("Nearby device does not expose the ProxiTalk packet service."); disconnect(state); return;
                 }
                 state.characteristic = characteristic;
-                writeNext(state);
+                handler.post(() -> queuePendingPackets(state));
             }
             @Override public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
                 if (state == null) return;
@@ -353,13 +354,16 @@ public final class BleMeshService extends Service {
             java.util.Iterator<String> packetKeys = packet.keys();
             while (packetKeys.hasNext()) {
                 String key = packetKeys.next();
-                if (!Arrays.asList("v", "id", "sender_id", "recipient_id", "created_at", "expires_at", "hops", "ciphertext", "sender_signing_key", "signature").contains(key)) return null;
+                if (!Arrays.asList("v", "id", "sender_id", "recipient_id", "created_at", "expires_at", "hops", "route_hops", "ciphertext", "sender_signing_key", "signature").contains(key)) return null;
             }
+            int routeHops = packet.optInt("route_hops", 0);
             if (packet.optInt("v", 0) != 1 || packetId.length() > 80 || packetId.isEmpty()
                     || createdAt <= 0 || createdAt > System.currentTimeMillis() + 60_000L
                     || expiresAt <= System.currentTimeMillis() || expiresAt <= createdAt
                     || expiresAt > createdAt + 14L * 24 * 60 * 60 * 1000
-                    || packet.optInt("hops", -1) < 0 || packet.optInt("hops", 13) > 12) return null;
+                    || packet.optInt("hops", -1) < 0 || packet.optInt("hops", 13) > 12
+                    || routeHops < 0 || routeHops > BlePacketStore.MAX_RELAY_HOPS) return null;
+            packet.put("route_hops", routeHops);
             UUID.fromString(senderId);
             UUID.fromString(recipientId);
             UUID.fromString(packetId);
@@ -396,37 +400,88 @@ public final class BleMeshService extends Service {
         } catch (Exception ignored) { return null; }
     }
 
+    public static void setLocalIdentity(String userId) {
+        if (userId == null || userId.isEmpty()) { localUserId = ""; return; }
+        try { localUserId = UUID.fromString(userId).toString(); }
+        catch (IllegalArgumentException ignored) { localUserId = ""; }
+    }
+
+    public static String setRelayEnabled(boolean enabled) {
+        BleMeshService service = instance;
+        if (service == null || !running) return "{\"ok\":false,\"error\":\"Start nearby BLE before changing relay settings.\"}";
+        relayEnabled = enabled;
+        service.getSharedPreferences("proxitalk_mesh", MODE_PRIVATE).edit().putBoolean("relay_enabled", enabled).apply();
+        service.handler.post(() -> {
+            if (enabled) service.queuePendingForAllConnections();
+            else service.removeQueuedRelayPackets();
+        });
+        return "{\"ok\":true}";
+    }
+
+    public static String acknowledgePacket(String packetId) {
+        BleMeshService service = instance;
+        if (service == null || service.packetStore == null || packetId == null || packetId.length() > 80)
+            return "{\"ok\":false}";
+        service.packetStore.completePacket(packetId);
+        return "{\"ok\":true}";
+    }
+
     public static String enqueuePacket(String json) {
         JSONObject packet = validatePacket(json);
         if (packet == null) return "{\"ok\":false,\"error\":\"Invalid, expired, or unencrypted packet\"}";
         BleMeshService service = instance;
-        if (!running || service == null) return "{\"ok\":false,\"error\":\"Nearby packet transport is not running\"}";
+        if (!running || service == null || service.packetStore == null) return "{\"ok\":false,\"error\":\"Nearby packet transport is not running\"}";
+        if (!service.packetStore.putPacket(packet, true, null))
+            return "{\"ok\":false,\"error\":\"Nearby encrypted queue is full or storage is unavailable\"}";
         int connected = service.getConnectedPeerCount();
-        service.handler.post(() -> service.queuePacketForConnectedPeers(packet.toString()));
+        service.handler.post(service::queuePendingForAllConnections);
         try {
             JSONObject result = new JSONObject();
             result.put("ok", true);
-            result.put("state", connected > 0 ? "queued_for_connected_peers" : "no_connected_peers");
+            result.put("state", connected > 0 ? "persisted_and_queued" : "persisted_waiting_for_peer");
             result.put("connectedPeerCount", connected);
+            result.put("queuedPacketCount", service.packetStore.pendingCount());
             return result.toString();
         } catch (Exception ignored) { return "{\"ok\":true}"; }
     }
 
-    private void queuePacketForConnectedPeers(String json) {
-        JSONObject packet = validatePacket(json);
-        if (packet == null) return;
-        String id = packet.optString("id");
+    private void queuePendingForAllConnections() {
+        synchronized (connections) {
+            for (Connection connection : connections.values()) queuePendingPackets(connection);
+        }
+    }
+
+    private void queuePendingPackets(Connection connection) {
+        if (packetStore == null || connection.characteristic == null) return;
+        List<String> packets = packetStore.pendingForPeer(connection.address, relayEnabled, localUserId, MAX_PENDING_PER_PEER);
+        for (String json : packets) {
+            JSONObject packet = validatePacket(json);
+            if (packet == null) continue;
+            String id = packet.optString("id");
+            if (!connection.sentIds.add(id)) continue;
+            while (connection.sentIds.size() > MAX_SEEN_PACKETS) {
+                java.util.Iterator<String> oldest = connection.sentIds.iterator();
+                if (oldest.hasNext()) { oldest.next(); oldest.remove(); }
+            }
+            if (connection.queue.size() >= MAX_PENDING_PER_PEER) { connection.sentIds.remove(id); break; }
+            connection.queue.addLast(packet.toString());
+        }
+        writeNext(connection);
+    }
+
+    private void removeQueuedRelayPackets() {
         synchronized (connections) {
             for (Connection connection : connections.values()) {
-                if (connection.sentIds.add(id)) {
-                    if (connection.queue.size() >= MAX_PENDING_PER_PEER) {
-                        fail("Nearby peer queue is full; packet was not queued.");
-                        connection.sentIds.remove(id);
-                        continue;
-                    }
-                    if (connection.sentIds.size() > MAX_SEEN_PACKETS) connection.sentIds.clear();
-                    connection.queue.addLast(json);
-                    writeNext(connection);
+                java.util.Iterator<String> queued = connection.queue.iterator();
+                while (queued.hasNext()) {
+                    String json = queued.next();
+                    try {
+                        String id = new JSONObject(json).optString("id");
+                        if (!packetStore.isOrigin(id)) {
+                            queued.remove();
+                            connection.sentIds.remove(id);
+                        }
+                    } catch (Exception ignored) { queued.remove(); }
                 }
             }
         }
@@ -467,9 +522,11 @@ public final class BleMeshService extends Service {
     private void writeFrame(Connection connection) {
         if (connection.frames == null || connection.characteristic == null) return;
         if (connection.frameIndex >= connection.frames.length) {
+            String completedId = connection.packetId;
             connection.frames = null;
             connection.packetId = null;
-            writeNext(connection);
+            if (packetStore != null) packetStore.markForwarded(completedId, connection.address);
+            queuePendingPackets(connection);
             return;
         }
         byte[] frame = connection.frames[connection.frameIndex];
@@ -533,25 +590,23 @@ public final class BleMeshService extends Service {
         String json = new String(completed, StandardCharsets.UTF_8);
         JSONObject packet = validatePacket(json);
         if (packet == null) { fail("Rejected an invalid, expired, or unencrypted BLE packet."); return; }
-        String id = packet.optString("id");
-        synchronized (INBOUND_PACKETS) {
-            if (!INBOUND_IDS.add(id)) return;
-            if (INBOUND_IDS.size() > MAX_SEEN_PACKETS) {
-                java.util.Iterator<String> oldest = INBOUND_IDS.iterator();
-                if (oldest.hasNext()) { oldest.next(); oldest.remove(); }
-            }
-            if (INBOUND_PACKETS.size() >= MAX_INBOUND_PACKETS) INBOUND_PACKETS.removeFirst();
-            INBOUND_PACKETS.addLast(packet.toString());
+        String recipient = packet.optString("recipient_id");
+        boolean isRecipient = !localUserId.isEmpty() && localUserId.equals(recipient);
+        if (!isRecipient && (!relayEnabled || packet.optInt("route_hops", 0) >= BlePacketStore.MAX_RELAY_HOPS)) return;
+        if (packetStore == null || !packetStore.putPacket(packet, false, address)) {
+            fail("The bounded encrypted nearby queue is full; this packet was dropped.");
+            return;
         }
+        if (!isRecipient && relayEnabled) handler.post(this::queuePendingForAllConnections);
     }
 
     public static String drainInboundPackets() {
         JSONArray packets = new JSONArray();
-        synchronized (INBOUND_PACKETS) {
-            while (!INBOUND_PACKETS.isEmpty() && packets.length() < 20) {
-                try { packets.put(new JSONObject(INBOUND_PACKETS.removeFirst())); }
-                catch (Exception ignored) { }
-            }
+        BleMeshService service = instance;
+        if (service == null || service.packetStore == null || localUserId.isEmpty()) return packets.toString();
+        for (String json : service.packetStore.leaseRecipientPackets(localUserId, 20)) {
+            try { packets.put(new JSONObject(json)); }
+            catch (Exception ignored) { }
         }
         return packets.toString();
     }
@@ -587,7 +642,7 @@ public final class BleMeshService extends Service {
                 ? new Notification.Builder(this, CHANNEL_ID) : new Notification.Builder(this);
         return builder.setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentTitle("ProxiTalk nearby service is on")
-                .setContentText("Encrypted packet carrier active; relay and delivery receipts are not implemented.")
+                .setContentText(relayEnabled ? "Opt-in encrypted packet relay is active (3-hop cap)." : "Nearby send/receive is active; packet relay is off.")
                 .setOngoing(true)
                 .build();
     }
@@ -612,7 +667,10 @@ public final class BleMeshService extends Service {
             result.put("peerCount", peers.length());
             result.put("connectedPeerCount", Math.max(serverCount, clientCount));
             result.put("peers", peers);
-            result.put("transport", "gatt-packet-prototype");
+            result.put("transport", "durable-bounded-gatt-relay");
+            result.put("relayEnabled", relayEnabled);
+            result.put("queuedPacketCount", service == null || service.packetStore == null ? 0 : service.packetStore.pendingCount());
+            result.put("maxRelayHops", BlePacketStore.MAX_RELAY_HOPS);
             result.put("error", error);
             return result.toString();
         } catch (Exception ignored) { return "{}"; }
@@ -641,7 +699,7 @@ public final class BleMeshService extends Service {
         synchronized (PEERS) { PEERS.clear(); }
         synchronized (SERVER_PEERS) { SERVER_PEERS.clear(); }
         synchronized (assemblies) { assemblies.clear(); }
-        synchronized (INBOUND_PACKETS) { INBOUND_PACKETS.clear(); INBOUND_IDS.clear(); }
+        if (packetStore != null) { packetStore.close(); packetStore = null; }
         if (instance == this) instance = null;
         super.onDestroy();
     }

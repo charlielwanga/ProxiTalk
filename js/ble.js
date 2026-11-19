@@ -11,7 +11,7 @@ const ProxiBLE = (() => {
   function getStatus() {
     const native = bridge();
     return native ? parse(native.getBleStatus(), { available: true, running: false, peerCount: 0, error: '' })
-      : { available: false, running: false, scanning: false, advertising: false, peerCount: 0, error: 'Native Android BLE discovery is unavailable in this web build.' };
+      : { available: false, running: false, scanning: false, advertising: false, relayEnabled: false, queuedPacketCount: 0, peerCount: 0, error: 'Native Android BLE discovery is unavailable in this web build.' };
   }
   async function startScan() {
     const native = bridge();
@@ -22,6 +22,23 @@ const ProxiBLE = (() => {
     const native = bridge();
     if (native) return parse(native.stopBleDiscovery(), { ok: true, state: 'stopping' });
     return { ok: false, error: 'Native Android BLE discovery is unavailable in this web build.' };
+  }
+  function setIdentity(userId) {
+    const native = bridge();
+    if (!native || typeof native.setBleIdentity !== 'function') return false;
+    try { native.setBleIdentity(String(userId || '')); return true; } catch (_) { return false; }
+  }
+  function setRelayEnabled(enabled) {
+    const native = bridge();
+    if (!native || typeof native.setBleRelayEnabled !== 'function') return { ok: false, error: 'Opt-in relay is available only on Android.' };
+    try { return parse(native.setBleRelayEnabled(!!enabled), { ok: false, error: 'Could not update relay setting.' }); }
+    catch (_) { return { ok: false, error: 'Could not update relay setting.' }; }
+  }
+  function acknowledgePacket(packetId) {
+    const native = bridge();
+    if (!native || typeof native.acknowledgeBlePacket !== 'function') return { ok: false };
+    try { return parse(native.acknowledgeBlePacket(String(packetId || '')), { ok: false }); }
+    catch (_) { return { ok: false }; }
   }
   function sendPacket(packet) {
     const native = bridge();
@@ -35,5 +52,6 @@ const ProxiBLE = (() => {
     const packets = parse(native.drainBlePackets(), []);
     return Array.isArray(packets) ? packets : [];
   }
-  return Object.freeze({ detect, getStatus, startScan, stopScan, sendPacket, drainPackets });
+  return Object.freeze({ detect, getStatus, startScan, stopScan, setIdentity, setRelayEnabled,
+    acknowledgePacket, sendPacket, drainPackets });
 })();

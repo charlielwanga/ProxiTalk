@@ -129,6 +129,8 @@ const ProxiCrypto = (() => {
       || includedKey.x !== trustedSigningPublicJwk.x || includedKey.y !== trustedSigningPublicJwk.y) return false;
     const payload = { ...packet };
     delete payload.signature;
+    // route_hops is mutable transport metadata; the immutable sender packet remains signed.
+    delete payload.route_hops;
     return verifyPayload(trustedSigningPublicJwk, payload, packet.signature);
   }
 
