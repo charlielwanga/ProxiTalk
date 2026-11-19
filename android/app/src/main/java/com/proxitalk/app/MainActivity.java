@@ -30,7 +30,10 @@ public class MainActivity extends Activity {
     private static final String AUTH_REDIRECT_URI = AUTH_SCHEME + "://" + AUTH_HOST + AUTH_PATH;
     private static final int FILE_CHOOSER_REQUEST = 1;
     private static final int BLE_PERMISSION_REQUEST = 2;
+    private static final int CALL_PERMISSION_REQUEST = 3;
     private boolean bleStartPending;
+    private android.webkit.PermissionRequest pendingCallPermissionRequest;
+    private String[] pendingWebPermissionResources;
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
@@ -88,8 +91,24 @@ public class MainActivity extends Activity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(android.webkit.PermissionRequest request) {
-                // Camera, microphone, and Web Bluetooth permissions are not in this release slice.
-                request.deny();
+                if (!APP_ORIGIN.equals(request.getOrigin().toString())) { request.deny(); return; }
+                java.util.List<String> nativePermissions = new java.util.ArrayList<>();
+                for (String resource : request.getResources()) {
+                    if (android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
+                        nativePermissions.add(Manifest.permission.RECORD_AUDIO);
+                    } else if (android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
+                        nativePermissions.add(Manifest.permission.CAMERA);
+                    } else { request.deny(); return; }
+                }
+                java.util.List<String> missing = new java.util.ArrayList<>();
+                for (String permission : nativePermissions) {
+                    if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) missing.add(permission);
+                }
+                if (missing.isEmpty()) { request.grant(request.getResources()); return; }
+                if (pendingCallPermissionRequest != null) pendingCallPermissionRequest.deny();
+                pendingCallPermissionRequest = request;
+                pendingWebPermissionResources = request.getResources();
+                requestPermissions(missing.toArray(new String[0]), CALL_PERMISSION_REQUEST);
             }
 
             @Override
@@ -210,6 +229,17 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == CALL_PERMISSION_REQUEST) {
+            android.webkit.PermissionRequest request = pendingCallPermissionRequest;
+            String[] resources = pendingWebPermissionResources;
+            pendingCallPermissionRequest = null;
+            pendingWebPermissionResources = null;
+            if (request == null) return;
+            boolean granted = grantResults.length > 0;
+            for (int result : grantResults) granted &= result == PackageManager.PERMISSION_GRANTED;
+            if (granted && resources != null) request.grant(resources); else request.deny();
+            return;
+        }
         if (requestCode != BLE_PERMISSION_REQUEST) return;
         boolean start = bleStartPending;
         bleStartPending = false;
@@ -245,6 +275,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (pendingCallPermissionRequest != null) pendingCallPermissionRequest.deny();
+        pendingCallPermissionRequest = null;
         if (filePathCallback != null) filePathCallback.onReceiveValue(null);
         if (webView != null) {
             webView.stopLoading();

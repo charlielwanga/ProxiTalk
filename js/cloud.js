@@ -85,6 +85,29 @@ const ProxiCloud = (() => {
     return inserted;
   }
 
+  async function sendCallSignal(signal) {
+    const rows = await api('proxitalk_call_signals', {
+      method: 'POST', headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ call_id: signal.callId, sender_id: signal.senderId,
+        recipient_id: signal.recipientId, kind: signal.kind, ciphertext: signal.ciphertext }),
+    });
+    const inserted = Array.isArray(rows) ? rows[0] : null;
+    if (!inserted?.id) throw new Error('The call signal was not accepted by the signaling mailbox.');
+    return inserted;
+  }
+  async function receiveCallSignals(userId, since) {
+    const uid = encodeURIComponent('eq.' + userId);
+    const after = encodeURIComponent('gte.' + since);
+    const now = encodeURIComponent('gt.' + new Date().toISOString());
+    return api(`proxitalk_call_signals?recipient_id=${uid}&created_at=${after}&expires_at=${now}&select=id,call_id,sender_id,kind,ciphertext,created_at&order=created_at.asc&limit=100`);
+  }
+  async function deleteCallSignal(id) {
+    return api(`proxitalk_call_signals?id=${encodeURIComponent('eq.' + id)}`, { method: 'DELETE' });
+  }
+  async function pruneCallSignals() {
+    return api(`proxitalk_call_signals?expires_at=${encodeURIComponent('lt.' + new Date().toISOString())}`, { method: 'DELETE' });
+  }
+
   async function receivePending(userId) {
     const uid = encodeURIComponent('eq.' + userId);
     const now = encodeURIComponent('gt.' + new Date().toISOString());
@@ -104,5 +127,6 @@ const ProxiCloud = (() => {
     return received;
   }
 
-  return { findDirectoryById, findDirectoryByUserId, createDirectoryProfile, updateDirectorySigningKey, sendEncryptedMessage, receivePending };
+  return { findDirectoryById, findDirectoryByUserId, createDirectoryProfile, updateDirectorySigningKey,
+    sendEncryptedMessage, receivePending, sendCallSignal, receiveCallSignals, deleteCallSignal, pruneCallSignals };
 })();

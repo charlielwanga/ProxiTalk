@@ -7,7 +7,7 @@ import { webcrypto } from 'node:crypto';
 
 const root = resolve(import.meta.dirname, '..');
 const read = file => readFile(resolve(root, file), 'utf8');
-const runtime = ['js/config.js', 'js/storage.js', 'js/crypto.js', 'js/auth.js', 'js/cloud.js', 'js/ble.js', 'js/mesh.js', 'js/app.js'];
+const runtime = ['js/config.js', 'js/storage.js', 'js/crypto.js', 'js/auth.js', 'js/cloud.js', 'js/ble.js', 'js/mesh.js', 'js/calls.js', 'js/app.js'];
 
 test('runtime JavaScript parses', async () => {
   for (const file of runtime) {
@@ -101,6 +101,44 @@ test('recipient-only encryption and device-local history encryption round-trip',
   assert.equal(await alice.verifyPacket({ ...blePacket, recipient_id: 'mallory' }, signingPublic), false);
   assert.equal(await bob.verifyPacket(blePacket, bobPublic), false);
   assert.ok(alicePublic.x && bobPublic.x && signingPublic.x);
+});
+
+test('WebRTC call signaling contains no plaintext SDP and decrypts only for the intended device', async () => {
+  const source = await read('js/calls.js');
+  const alice = cryptoHarness(await read('js/crypto.js'));
+  const bob = cryptoHarness(await read('js/crypto.js'));
+  const alicePublic = await alice.ensureIdentity('alice-caller');
+  const bobPublic = await bob.ensureIdentity('bob-recipient');
+  const sent = [];
+  class PeerConnection {
+    addTrack() {}
+    async createOffer() { return { type: 'offer', sdp: 'private-sdp-candidate-192.0.2.1' }; }
+    async setLocalDescription(value) { this.localDescription = { ...value, toJSON() { return { type: value.type, sdp: value.sdp }; } }; }
+    close() {}
+  }
+  const calls = runInNewContext(source + '\nProxiCalls', {
+    crypto: webcrypto,
+    navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] }) } },
+    RTCPeerConnection: PeerConnection,
+    document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
+    setInterval: () => 1, clearInterval() {}, setTimeout: () => 2, clearTimeout() {},
+    console: { warn() {} },
+  });
+  calls.initialize({ userId: 'alice-caller', profile: { public_key: alicePublic }, crypto: alice,
+    cloud: { async receiveCallSignals() { return []; }, async pruneCallSignals() {},
+      async sendCallSignal(signal) { sent.push(signal); return { id: 'signal-1' }; } },
+    async getContact() { return null; } });
+  await calls.start({ userId: 'bob-recipient', publicKey: bobPublic, name: 'Bob' }, 'audio');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].kind, 'offer');
+  const stored = sent[0].ciphertext;
+  assert.equal(JSON.stringify(stored).includes('private-sdp-candidate-192.0.2.1'), false);
+  assert.equal(Object.hasOwn(stored, 'payload'), false);
+  assert.equal(await alice.verifyPacket(stored, alice.getSigningPublicKey()), true);
+  const decoded = JSON.parse(await bob.decryptFromMe(stored.ciphertext));
+  assert.equal(decoded.payload.description.sdp, 'private-sdp-candidate-192.0.2.1');
+  await assert.rejects(alice.decryptFromMe(stored.ciphertext));
+  calls.stop();
 });
 
 test('directory signing-key migration is additive and owner-scoped', async () => {
@@ -228,7 +266,7 @@ test('browser connects only through the authenticated Supabase client and limits
   assert.match(config, /https:\/\/oxmxffftlpbpbydphhpv\.supabase\.co/);
   assert.match(config, /sb_publishable_/);
   assert.doesNotMatch(config, /sb_secret_/);
-  assert.match(html, /Early access: one-to-one online text is recipient-key encrypted/);
+  assert.match(html, /Early access: encrypted one-to-one online text and beta one-to-one voice\/video calls/);
 });
 
 test('message transport encrypts before insert and scopes message policies to participants', async () => {
@@ -298,7 +336,10 @@ test('Android 13 app shell uses a secure asset origin and a narrow PKCE deep lin
   const workflow = await read('.github/workflows/android-debug-apk.yml');
   assert.match(activity, /WebViewAssetLoader/);
   assert.match(activity, /request\.deny\(\)/);
-  assert.doesNotMatch(activity, /request\.grant|sendPacket/);
+  assert.match(activity, /APP_ORIGIN\.equals\(request\.getOrigin\(\)\.toString\(\)\)/);
+  assert.match(activity, /RESOURCE_AUDIO_CAPTURE/);
+  assert.match(activity, /RESOURCE_VIDEO_CAPTURE/);
+  assert.doesNotMatch(activity, /sendPacket/);
   assert.match(activity, /setAllowFileAccessFromFileURLs\(false\)/);
   assert.match(activity, /setAllowUniversalAccessFromFileURLs\(false\)/);
   assert.match(activity, /code\.length\(\) <= 4096/);
@@ -309,29 +350,61 @@ test('Android 13 app shell uses a secure asset origin and a narrow PKCE deep lin
   assert.match(manifest, /android:scheme="com\.proxitalk\.app" android:host="auth" android:path="\/callback"/);
   assert.match(auth, /com\.proxitalk\.app:\/\/auth\/callback/);
   assert.match(gradle, /targetSdk rootProject\.ext\.targetSdk/);
+  assert.match(await read('android/build.gradle'), /versionCode = 2/);
   assert.match(workflow, /java-version: '17'/);
   assert.match(workflow, /gradle-version: '8\.7'/);
   assert.match(workflow, /assembleDebug/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
-  assert.doesNotMatch(manifest, /RECORD_AUDIO|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE/);
+  assert.doesNotMatch(manifest, /READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE/);
 });
 
-test('non-messaging features are accurately disclosed as unavailable', async () => {
+test('beta calls keep explicit limits while unsupported features remain disclosed', async () => {
   const html = await read('index.html');
   const app = await read('js/app.js');
-  assert.match(html, /Attachments, groups, calls, and multi-hop offline mesh are not available/);
-  assert.match(html, /experimental signed one-hop BLE text path/);
-  assert.match(html, /SOS unavailable/);
+  const readme = await read('README.md');
+  assert.match(html, /beta one-to-one voice\/video calls/);
+  assert.match(html, /No call notifications or emergency calling/);
   assert.match(app, /Encrypted group messaging is not available yet/);
-  assert.match(app, /Voice calls are not available/);
+  assert.match(readme, /there is no TURN relay/);
+  assert.match(readme, /Do not use it for emergencies/);
+});
+
+test('calls encrypt and device-sign signaling, use WebRTC, and keep RLS participant-scoped', async () => {
+  const calls = await read('js/calls.js');
+  const cloud = await read('js/cloud.js');
+  const migration = await read('supabase/migrations/202611200001_add_encrypted_call_signaling.sql');
+  const html = await read('index.html');
+  const manifest = await read('android/AndroidManifest.xml');
+  const activity = await read('android/app/src/main/java/com/proxitalk/app/MainActivity.java');
+  assert.match(calls, /new RTCPeerConnection/);
+  assert.match(calls, /getUserMedia/);
+  assert.match(calls, /crypto\.encryptFor\(targetCall\.contact\.publicKey/);
+  assert.match(calls, /crypto\.signPacket/);
+  assert.match(calls, /crypto\.verifyPacket/);
+  assert.match(calls, /crypto\.decryptFromMe/);
+  assert.match(calls, /stun:stun\.l\.google\.com:19302/);
+  assert.match(calls, /foreground|visibilityState/);
+  assert.match(cloud, /sendCallSignal/);
+  assert.match(cloud, /receiveCallSignals/);
+  assert.match(migration, /ENABLE ROW LEVEL SECURITY/);
+  assert.match(migration, /call_signals_sender_insert[\s\S]*sender_id = \(SELECT auth\.uid\(\)\)/);
+  assert.match(migration, /call_signals_participant_read[\s\S]*recipient_id = \(SELECT auth\.uid\(\)\)/);
+  assert.match(migration, /expires_at <= created_at \+ interval '10 minutes'/);
+  assert.match(html, /id="callRemoteVideo"/);
+  assert.match(manifest, /android\.permission\.RECORD_AUDIO/);
+  assert.match(manifest, /android\.permission\.CAMERA/);
+  assert.match(activity, /RESOURCE_AUDIO_CAPTURE/);
+  assert.match(activity, /RESOURCE_VIDEO_CAPTURE/);
+  assert.match(activity, /APP_ORIGIN\.equals\(request\.getOrigin\(\)\.toString\(\)\)/);
+  assert.match(activity, /CALL_PERMISSION_REQUEST/);
 });
 
 test('static build includes the complete application shell and service worker never caches APIs', async () => {
-  for (const file of ['dist/index.html', 'dist/manifest.json', 'dist/sw.js', 'dist/css/style.css', 'dist/js/config.js', 'dist/js/storage.js', 'dist/js/crypto.js', 'dist/js/auth.js', 'dist/js/cloud.js', 'dist/js/ble.js', 'dist/js/mesh.js', 'dist/js/app.js', 'dist/assets/icon.svg', 'android/app/src/main/assets/www/index.html']) {
+  for (const file of ['dist/index.html', 'dist/manifest.json', 'dist/sw.js', 'dist/css/style.css', 'dist/js/config.js', 'dist/js/storage.js', 'dist/js/crypto.js', 'dist/js/auth.js', 'dist/js/cloud.js', 'dist/js/ble.js', 'dist/js/mesh.js', 'dist/js/calls.js', 'dist/js/app.js', 'dist/assets/icon.svg', 'android/app/src/main/assets/www/index.html']) {
     await assert.doesNotReject(access(resolve(root, file)), file);
   }
   const sw = await read('dist/sw.js');
-  assert.match(sw, /const CACHE = 'proxitalk-shell-v11'/);
+  assert.match(sw, /const CACHE = 'proxitalk-shell-v12'/);
   const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
   assert.ok(assetList, 'service worker should declare its precache list');
   const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);

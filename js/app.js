@@ -645,7 +645,7 @@
       <div class="detail-row"><span>Message security</span><b>Recipient public-key encryption for online text</b></div>
       <div class="detail-row"><span>Delivery</span><b>${offlineMode || !authUser ? 'Local drafts only; not sent' : 'Internet mailbox; experimental BLE handoff if online send fails'}</b></div>
       <div class="detail-row"><span>Device storage</span><b>Private key is device-bound; no key recovery</b></div>
-      <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">Compare both key fingerprints with your contact out of band to detect directory key changes. The signing key authenticates experimental one-hop Android BLE text against the online directory. This path is not physically validated and does not confirm receipt or relay messages. New devices cannot decrypt old messages. Attachments, groups, calls, and emergency SOS are not supported. Do not rely on ProxiTalk for emergencies.</p>
+      <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">Compare both key fingerprints with your contact out of band to detect directory key changes. The signing key authenticates experimental one-hop Android BLE text against the online directory. This path is not physically validated and does not confirm receipt or relay messages. New devices cannot decrypt old messages. Attachments, groups, SMS, call push notifications, and emergency SOS are not supported. Calls are beta and require a direct network route; do not rely on ProxiTalk for emergencies.</p>
       ${authUser ? '<button class="btn-primary" id="signOutBtn" style="margin-top:12px">Sign out</button>' : ''}
       <button class="btn-primary" id="wipeBtn" style="margin-top:12px;background:#3D1A20;color:#FF8A96">Clear local chat data</button>`);
     if (currentProfile) $('copyIdBtn').onclick = async () => {
@@ -653,7 +653,7 @@
       catch (_) { toast('Your ProxiTalk ID is ' + currentProfile.proxitalk_id); }
     };
     $('wipeBtn').onclick = () => { Store.setNamespace(authUser?.id || ''); localStorage.removeItem('proxitalk_' + (authUser?.id ? authUser.id + '_' : '') + 'contacts'); localStorage.removeItem('proxitalk_' + (authUser?.id ? authUser.id + '_' : '') + 'chats'); location.reload(); };
-    if (authUser) $('signOutBtn').onclick = async () => { await ProxiAuth.signOut(); ProxiCrypto.clearMemory(); sessionStorage.removeItem('proxitalk_continue_offline'); location.reload(); };
+    if (authUser) $('signOutBtn').onclick = async () => { ProxiCalls.stop(); await ProxiAuth.signOut(); ProxiCrypto.clearMemory(); sessionStorage.removeItem('proxitalk_continue_offline'); location.reload(); };
   };
 
   // ── Chat info (hop path) ───────────────────────────────────
@@ -678,8 +678,77 @@
       <p style="font-size:12px;color:var(--muted)">No Bluetooth hop path exists in this local-only preview.</p>`);
   };
 
-  // ── Mesh voice calls ───────────────────────────────────────
-  $('callBtn').onclick = () => toast('Voice calls are not available in this build: live mesh signaling is not implemented.');
+  // ── One-to-one WebRTC calls ─────────────────────────────────
+  let callUiTimer = null;
+  function attachCallMedia(element, stream) {
+    if (!element) return;
+    if (element.srcObject !== stream) element.srcObject = stream;
+    if (stream) element.play().catch(() => {});
+  }
+  function renderCallState(event) {
+    const overlay = $('callOverlay');
+    const current = event.call;
+    if (event.state === 'idle') { overlay.classList.add('hidden'); return; }
+    overlay.classList.remove('hidden');
+    clearTimeout(callUiTimer);
+    if (event.state === 'ended') {
+      $('callTitle').textContent = 'Call finished';
+      $('callStatus').textContent = event.message || 'Call ended.';
+      $('callModeLabel').textContent = '';
+      ['callMuteBtn', 'callVideoBtn', 'callRejectBtn', 'callAcceptBtn', 'callEndBtn'].forEach(id => $(id).classList.add('hidden'));
+      callUiTimer = setTimeout(() => overlay.classList.add('hidden'), 2400);
+      return;
+    }
+    if (!current) return;
+    $('callTitle').textContent = current.contact?.name || 'ProxiTalk call';
+    $('callAvatar').textContent = initials(current.contact?.name || 'PT');
+    $('callModeLabel').textContent = current.mode === 'video' ? 'Video call · peer-to-peer encrypted media' : 'Voice call · peer-to-peer encrypted media';
+    const labels = { incoming: 'Incoming call · answer only if you recognize this contact.', preparing: 'Requesting microphone' + (current.mode === 'video' ? ' and camera' : '') + ' access…', outgoing: 'Calling · waiting for an answer…', connecting: 'Connecting directly…', active: 'Connected · peer-to-peer', failed: 'Could not connect. This network may require a TURN relay, which is not configured.' };
+    $('callStatus').textContent = labels[event.state] || 'Call is setting up…';
+    const incoming = event.state === 'incoming';
+    const active = event.state === 'active';
+    const controls = ['callMuteBtn', 'callVideoBtn', 'callRejectBtn', 'callAcceptBtn', 'callEndBtn'];
+    controls.forEach(id => $(id).classList.add('hidden'));
+    if (incoming) { $('callRejectBtn').classList.remove('hidden'); $('callAcceptBtn').classList.remove('hidden'); }
+    else {
+      $('callEndBtn').classList.remove('hidden');
+      if (event.state === 'active' || current.direction === 'outgoing' || event.state === 'preparing' || event.state === 'connecting' || event.state === 'failed') $('callMuteBtn').classList.remove('hidden');
+      if (current.mode === 'video' && event.state !== 'failed') $('callVideoBtn').classList.remove('hidden');
+    }
+    $('callMuteBtn').textContent = current.muted ? '🔇' : '🎙️';
+    $('callMuteBtn').title = current.muted ? 'Unmute microphone' : 'Mute microphone';
+    $('callVideoBtn').textContent = current.videoEnabled ? '📹' : '🚫';
+    $('callVideoStage').classList.toggle('hidden', current.mode !== 'video');
+    $('callAvatar').classList.toggle('hidden', current.mode === 'video');
+  }
+  ProxiCalls.setCallbacks({
+    onStateChange: renderCallState,
+    onIncoming: ({ contact }) => toast('Incoming call from ' + (contact?.name || 'a saved contact')),
+    onLocalStream: (stream, mode) => { attachCallMedia($('callLocalVideo'), stream); $('callLocalVideo').classList.toggle('hidden', !stream || mode !== 'video'); },
+    onRemoteStream: (stream, mode) => {
+      attachCallMedia($('callRemoteVideo'), mode === 'video' ? stream : null);
+      attachCallMedia($('callRemoteAudio'), mode === 'audio' ? stream : null);
+    },
+  });
+  $('callBtn').onclick = () => {
+    const contact = contactById(activeChat);
+    if (!contact) return toast('Open a saved contact chat before starting a call.');
+    if (!authUser || !currentProfile || !keyAvailable || !signingKeyAvailable || offlineMode) return toast('Sign in, unlock this device’s keys, and sync your signing key before calling.');
+    if (!contact.userId || !contact.publicKey) return toast('This contact is missing their call encryption key.');
+    openModal('Start a secure call', `<p class="muted">Call ${esc(contact.name)} using a direct internet connection. Both people must have ProxiTalk open; some networks may block direct calls.</p><button class="btn-primary" id="startAudioCall" style="margin-top:12px">📞 Start voice call</button><button class="btn-primary" id="startVideoCall" style="margin-top:8px">📹 Start video call</button>`);
+    async function begin(mode) {
+      closeModal();
+      try { await ProxiCalls.start(contact, mode); }
+      catch (error) { toast(error.message || 'Could not start the call. Check microphone/camera permissions.'); }
+    }
+    $('startAudioCall').onclick = () => begin('audio');
+    $('startVideoCall').onclick = () => begin('video');
+  };
+  $('callAcceptBtn').onclick = async () => { try { await ProxiCalls.accept(); } catch (error) { toast(error.message || 'Could not answer call.'); } };
+  $('callRejectBtn').onclick = () => ProxiCalls.decline();
+  $('callEndBtn').onclick = () => ProxiCalls.end();
+  $('callMuteBtn').onclick = () => { const muted = ProxiCalls.toggleMute(); if (typeof muted !== 'boolean') toast('Microphone is not active yet.'); };
+  $('callVideoBtn').onclick = () => { const enabled = ProxiCalls.toggleVideo(); if (typeof enabled !== 'boolean') toast('Camera is not active yet.'); };
 
   // ── Composer ───────────────────────────────────────────────
   const input = $('msgInput');
@@ -802,6 +871,10 @@
   renderChatList();
   if (authUser && currentProfile) {
     syncMissingContactSigningKeys();
+    if (keyAvailable && signingKeyAvailable) {
+      ProxiCalls.initialize({ userId: authUser.id, profile: currentProfile, cloud: ProxiCloud, crypto: ProxiCrypto,
+        getContact: async peer => contacts.find(contact => contact.userId === peer.user_id) || null });
+    }
     pollInbox();
     setInterval(pollInbox, 5000);
     window.addEventListener('online', pollInbox);

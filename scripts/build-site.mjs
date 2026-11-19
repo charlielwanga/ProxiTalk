@@ -16,6 +16,7 @@ const files = [
   'js/cloud.js',
   'js/ble.js',
   'js/mesh.js',
+  'js/calls.js',
   'js/app.js',
   'assets/icon.svg',
 ];
