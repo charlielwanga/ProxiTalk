@@ -1,5 +1,5 @@
 /* ProxiTalk application-shell cache only. Auth, API, and message requests are never cached. */
-const CACHE = 'proxitalk-shell-v10';
+const CACHE = 'proxitalk-shell-v11';
 const ASSETS = [
   './', './index.html', './manifest.json', './assets/icon.svg',
   './css/style.css', './js/config.js', './js/storage.js', './js/crypto.js',

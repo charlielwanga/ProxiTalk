@@ -224,7 +224,8 @@ test('browser connects only through the authenticated Supabase client and limits
   assert.match(html, /js\/auth\.js/);
   assert.match(html, /js\/cloud\.js/);
   assert.match(html, /js\/crypto\.js/);
-  assert.match(html, /connect-src[^\"]*https:\/\/hsgcsyhyzsftinisksty\.supabase\.co/);
+  assert.match(html, /connect-src[^\"]*https:\/\/oxmxffftlpbpbydphhpv\.supabase\.co/);
+  assert.match(config, /https:\/\/oxmxffftlpbpbydphhpv\.supabase\.co/);
   assert.match(config, /sb_publishable_/);
   assert.doesNotMatch(config, /sb_secret_/);
   assert.match(html, /Early access: one-to-one online text is recipient-key encrypted/);
@@ -330,7 +331,7 @@ test('static build includes the complete application shell and service worker ne
     await assert.doesNotReject(access(resolve(root, file)), file);
   }
   const sw = await read('dist/sw.js');
-  assert.match(sw, /const CACHE = 'proxitalk-shell-v10'/);
+  assert.match(sw, /const CACHE = 'proxitalk-shell-v11'/);
   const assetList = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
   assert.ok(assetList, 'service worker should declare its precache list');
   const assets = [...assetList[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
